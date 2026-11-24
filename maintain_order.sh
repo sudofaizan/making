@@ -6,6 +6,8 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$SCRIPT_DIR" || exit 1
 # shellcheck source=load_env.sh
 source "${SCRIPT_DIR}/load_env.sh"
+# shellcheck source=primary_regime_lib.sh
+source "${SCRIPT_DIR}/primary_regime_lib.sh"
 
 MT5="$MT5_CMD"
 [[ -x "$MT5" ]] || MT5="$(command -v mt5 2>/dev/null || true)"
@@ -103,51 +105,8 @@ trail_winning_primaries() {
   done
 }
 
-price_differs() {
-  local order_price="$1" ema_price="$2"
-  awk -v a="$order_price" -v b="$ema_price" -v e="$PRICE_EPS" \
-    'BEGIN { d = a - b; if (d < 0) d = -d; exit (d >= e) ? 0 : 1 }'
-}
-
-orders_has_primary_at() {
-  local orders_raw="$1" otype="$2" magic="$3" target_price="$4"
-  echo "$orders_raw" | jq -e \
-    --arg c "$COMMENT" --arg t "$otype" --argjson m "$magic" \
-    --arg p "$target_price" --argjson e "$PRICE_EPS" \
-    --argjson vmin "$PRIMARY_VOLUME_MIN" --argjson vmax "$PRIMARY_VOLUME_MAX" \
-    '[.orders[]? | select(
-      .comment == $c and .type == $t and .magic == $m
-      and ((.volume | tonumber) >= $vmin and (.volume | tonumber) <= $vmax)
-      and (((.price - ($p | tonumber)) * (.price - ($p | tonumber))) <= ($e * $e))
-    )] | length > 0' >/dev/null
-}
-
-primary_order_count() {
-  local orders_raw="$1"
-  echo "$orders_raw" | jq -r \
-    --arg c "$COMMENT" --argjson buy "$BUY_MAGIC" --argjson sell "$SELL_MAGIC" \
-    --argjson vmin "$PRIMARY_VOLUME_MIN" --argjson vmax "$PRIMARY_VOLUME_MAX" \
-    '[.orders[]? | select(
-      .comment == $c
-      and ((.magic == $buy) or (.magic == $sell))
-      and ((.volume | tonumber) >= $vmin and (.volume | tonumber) <= $vmax)
-    )] | length'
-}
-
-list_primary_orders() {
-  local orders_raw="$1"
-  echo "$orders_raw" | jq -c \
-    --arg c "$COMMENT" --argjson buy "$BUY_MAGIC" --argjson sell "$SELL_MAGIC" \
-    --argjson vmin "$PRIMARY_VOLUME_MIN" --argjson vmax "$PRIMARY_VOLUME_MAX" \
-    '.orders[]? | select(
-      .comment == $c
-      and ((.magic == $buy) or (.magic == $sell))
-      and ((.volume | tonumber) >= $vmin and (.volume | tonumber) <= $vmax)
-    )'
-}
-
 maintain_tick() {
-  local ema_raw orders_raw ema_price count
+  local ema_raw orders_raw ema_price price_json mid_price regime
   ema_raw=$(mt5_retry get_ema "$SYMBOL" "$PERIOD" "$METHOD" "$EMA_TIMEFRAME" "$EMA_CANDLE_COUNT") || return 1
   ema_price=$(echo "$ema_raw" | jq -er .value) || return 1
 
@@ -157,63 +116,17 @@ maintain_tick() {
     return 1
   fi
 
-  count=$(primary_order_count "$orders_raw")
-  if [[ "$count" -eq 0 ]]; then
-    echo "no PRIMARY ${PRIMARY_VOLUME} pending (magic ${BUY_MAGIC}/${SELL_MAGIC}) — EMA ${ema_price}"
-    return 0
+  price_json=$(mt5_retry get_price "$SYMBOL") || return 1
+  mid_price=$(primary_regime_mid_price "$price_json") || return 1
+
+  if awk -v p="$mid_price" -v e="$ema_price" 'BEGIN { exit !(p > e) }'; then
+    regime="above EMA → buy_limit + sell_stop"
+  else
+    regime="at/below EMA → sell_limit + buy_stop"
   fi
+  echo "[$RUN_TAG] EMA ${PERIOD} ${METHOD}: ${ema_price} | mid: ${mid_price} | ${regime}"
 
-  echo "[$RUN_TAG] EMA ${PERIOD} ${METHOD}: ${ema_price} — checking ${count} PRIMARY order(s)"
-
-  local rows=()
-  while IFS= read -r line; do
-    [[ -n "$line" ]] && rows+=("$line")
-  done < <(list_primary_orders "$orders_raw")
-
-  local row ticket otype magic oprice
-  for row in "${rows[@]}"; do
-    ticket=$(echo "$row" | jq -r .ticket)
-    otype=$(echo "$row" | jq -r .type)
-    magic=$(echo "$row" | jq -r .magic)
-    oprice=$(echo "$row" | jq -r .price)
-
-    orders_raw=$(fetch_orders) || continue
-    if ! price_differs "$oprice" "$ema_price"; then
-      echo "ok ticket $ticket $otype @ $oprice (within ${PRICE_EPS} of EMA)"
-      continue
-    fi
-
-    if orders_has_primary_at "$orders_raw" "$otype" "$magic" "$ema_price"; then
-      echo "cancel stale ticket $ticket $otype magic $magic @ $oprice — already at EMA"
-      mt5_retry close_order "$ticket" >/dev/null || echo "warn: close_order $ticket failed" >&2
-      continue
-    fi
-
-    echo "reprice ticket $ticket $otype magic $magic: $oprice -> $ema_price"
-    mt5_retry close_order "$ticket" >/dev/null || {
-      echo "warn: close_order $ticket failed" >&2
-      continue
-    }
-
-    orders_raw=$(fetch_orders) || continue
-    if orders_has_primary_at "$orders_raw" "$otype" "$magic" "$ema_price"; then
-      echo "skip place $otype magic $magic — active order already at EMA ${ema_price}"
-      continue
-    fi
-
-    if echo "$orders_raw" | jq -e \
-      --arg t "$otype" --argjson m "$magic" --arg p "$ema_price" --argjson e "$PRICE_EPS" \
-      '[.orders[]? | select(
-        .type == $t and .magic == $m
-        and (((.price - ($p | tonumber)) * (.price - ($p | tonumber))) <= ($e * $e))
-      )] | length > 0' >/dev/null; then
-      echo "skip place $otype @ $ema_price — pending order at price (magic $magic)"
-      continue
-    fi
-
-    mt5_retry open_order "$SYMBOL" "$otype" "$PRIMARY_VOLUME" "$ema_price" "$magic" 0 0 "$COMMENT"
-  done
-
+  sync_primary_regime_at_ema "$ema_price" "$orders_raw" "$mid_price" || return 1
   trail_winning_primaries
 }
 

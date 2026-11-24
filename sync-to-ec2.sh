@@ -23,6 +23,7 @@ ssh -i "$SSH_KEY" -o StrictHostKeyChecking=accept-new "$SSH_USER_HOST" \
 rsync -avz \
   -e "${RSYNC_SSH[*]}" \
   --include='*.sh' \
+  --include='primary_regime_lib.sh' \
   --include='*.env' \
   --include='mt5' \
   --include='mt5_api.sh' \

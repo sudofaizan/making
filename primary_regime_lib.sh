@@ -1,0 +1,147 @@
+# Shared PRIMARY regime pendings at EMA (init + maintain_order).
+# Requires load_env.sh: SYMBOL, COMMENT, BUY_MAGIC, SELL_MAGIC, PRIMARY_VOLUME, PRICE_EPS, …
+# Caller sets MT5 or MT5_CMD and optional mt5_retry wrapper; default: direct "$MT5_CMD" or "$MT5".
+
+_mt5_primary() {
+  if declare -F mt5_retry >/dev/null 2>&1; then
+    mt5_retry "$@"
+  else
+    local m="${MT5_CMD:-${MT5:-./mt5}}"
+    "$m" "$@"
+  fi
+}
+
+primary_regime_mid_price() {
+  local price_json="$1"
+  echo "$price_json" | jq -er 'if (.last | tonumber) > 0 then .last else (.bid + .ask) / 2 end'
+}
+
+# Prints lines: order_type magic
+primary_regime_required_pairs() {
+  local mid="$1" ema="$2"
+  if awk -v p="$mid" -v e="$ema" 'BEGIN { exit !(p > e) }'; then
+    echo "buy_limit $BUY_MAGIC"
+    echo "sell_stop $SELL_MAGIC"
+  else
+    echo "sell_limit $SELL_MAGIC"
+    echo "buy_stop $BUY_MAGIC"
+  fi
+}
+
+orders_has_primary() {
+  local orders_raw="$1" otype="$2" magic="$3"
+  echo "$orders_raw" | jq -e --arg t "$otype" --argjson m "$magic" --arg c "$COMMENT" \
+    --argjson vmin "$PRIMARY_VOLUME_MIN" --argjson vmax "$PRIMARY_VOLUME_MAX" \
+    '[.orders[]? | select(
+      .type == $t and .magic == $m and .comment == $c
+      and ((.volume | tonumber) >= $vmin and (.volume | tonumber) <= $vmax)
+    )] | length > 0' >/dev/null
+}
+
+primary_order_row() {
+  local orders_raw="$1" otype="$2" magic="$3"
+  echo "$orders_raw" | jq -c --arg t "$otype" --argjson m "$magic" --arg c "$COMMENT" \
+    --argjson vmin "$PRIMARY_VOLUME_MIN" --argjson vmax "$PRIMARY_VOLUME_MAX" \
+    '.orders[]? | select(
+      .type == $t and .magic == $m and .comment == $c
+      and ((.volume | tonumber) >= $vmin and (.volume | tonumber) <= $vmax)
+    )' | head -1
+}
+
+list_stale_regime_primaries() {
+  local orders_raw="$1" mid="$2" ema="$3"
+  local required otype magic req_types=()
+  while read -r otype magic; do
+    [[ -n "$otype" ]] && req_types+=("$otype")
+  done < <(primary_regime_required_pairs "$mid" "$ema")
+
+  local req_json
+  req_json=$(printf '%s\n' "${req_types[@]}" | jq -R . | jq -s .)
+  echo "$orders_raw" | jq -c \
+    --arg c "$COMMENT" --argjson buy "$BUY_MAGIC" --argjson sell "$SELL_MAGIC" \
+    --argjson vmin "$PRIMARY_VOLUME_MIN" --argjson vmax "$PRIMARY_VOLUME_MAX" \
+    --argjson req "$req_json" \
+    '.orders[]? | select(
+      .comment == $c and ((.magic == $buy) or (.magic == $sell))
+      and ((.volume | tonumber) >= $vmin and (.volume | tonumber) <= $vmax)
+      and ((.type as $t | any($req[]; . == $t) | not))
+    )'
+}
+
+price_differs() {
+  local order_price="$1" ema_price="$2"
+  awk -v a="$order_price" -v b="$ema_price" -v e="$PRICE_EPS" \
+    'BEGIN { d = a - b; if (d < 0) d = -d; exit (d >= e) ? 0 : 1 }'
+}
+
+orders_has_primary_at_price() {
+  local orders_raw="$1" otype="$2" magic="$3" target_price="$4"
+  echo "$orders_raw" | jq -e \
+    --arg c "$COMMENT" --arg t "$otype" --argjson m "$magic" \
+    --arg p "$target_price" --argjson e "$PRICE_EPS" \
+    --argjson vmin "$PRIMARY_VOLUME_MIN" --argjson vmax "$PRIMARY_VOLUME_MAX" \
+    '[.orders[]? | select(
+      .comment == $c and .type == $t and .magic == $m
+      and ((.volume | tonumber) >= $vmin and (.volume | tonumber) <= $vmax)
+      and (((.price - ($p | tonumber)) * (.price - ($p | tonumber))) <= ($e * $e))
+    )] | length > 0' >/dev/null
+}
+
+# Keep two regime pendings on EMA; cancel wrong-type; place missing; reprice to EMA.
+sync_primary_regime_at_ema() {
+  local ema_price="$1" orders_raw="$2" mid_price="$3"
+  local otype magic row ticket oprice stale
+
+  while IFS= read -r stale; do
+    [[ -z "$stale" ]] && continue
+    ticket=$(echo "$stale" | jq -r .ticket)
+    echo "cancel wrong-regime PRIMARY ticket $ticket $(echo "$stale" | jq -r .type)"
+    _mt5_primary close_order "$ticket" >/dev/null || \
+      echo "warn: close_order $ticket failed" >&2
+  done < <(list_stale_regime_primaries "$orders_raw" "$mid_price" "$ema_price")
+
+  orders_raw=$(_mt5_primary get_orders "$SYMBOL") || return 1
+
+  while read -r otype magic; do
+    [[ -z "$otype" ]] && continue
+    row=$(primary_order_row "$orders_raw" "$otype" "$magic")
+    if [[ -z "$row" ]]; then
+      if orders_has_primary_at_price "$orders_raw" "$otype" "$magic" "$ema_price"; then
+        echo "skip place $otype magic $magic — already at EMA"
+        continue
+      fi
+      echo "place $otype @ $ema_price (magic $magic)"
+      _mt5_primary open_order "$SYMBOL" "$otype" "$PRIMARY_VOLUME" "$ema_price" "$magic" 0 0 "$COMMENT"
+      orders_raw=$(_mt5_primary get_orders "$SYMBOL") || return 1
+      continue
+    fi
+
+    ticket=$(echo "$row" | jq -r .ticket)
+    oprice=$(echo "$row" | jq -r .price)
+    if ! price_differs "$oprice" "$ema_price"; then
+      echo "ok ticket $ticket $otype @ $oprice (within ${PRICE_EPS} of EMA)"
+      continue
+    fi
+
+    if orders_has_primary_at_price "$orders_raw" "$otype" "$magic" "$ema_price"; then
+      echo "cancel stale ticket $ticket $otype magic $magic @ $oprice — already at EMA"
+      _mt5_primary close_order "$ticket" >/dev/null || echo "warn: close_order $ticket failed" >&2
+      continue
+    fi
+
+    echo "reprice ticket $ticket $otype magic $magic: $oprice -> $ema_price"
+    _mt5_primary close_order "$ticket" >/dev/null || {
+      echo "warn: close_order $ticket failed" >&2
+      continue
+    }
+    orders_raw=$(_mt5_primary get_orders "$SYMBOL") || return 1
+    if orders_has_primary_at_price "$orders_raw" "$otype" "$magic" "$ema_price"; then
+      echo "skip place $otype magic $magic — active order already at EMA"
+      continue
+    fi
+    _mt5_primary open_order "$SYMBOL" "$otype" "$PRIMARY_VOLUME" "$ema_price" "$magic" 0 0 "$COMMENT"
+    orders_raw=$(_mt5_primary get_orders "$SYMBOL") || return 1
+  done < <(primary_regime_required_pairs "$mid_price" "$ema_price")
+
+  return 0
+}

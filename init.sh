@@ -56,6 +56,8 @@ fi
 export ENV_FILE
 # shellcheck source=load_env.sh
 source "${SCRIPT_DIR}/load_env.sh"
+# shellcheck source=primary_regime_lib.sh
+source "${SCRIPT_DIR}/primary_regime_lib.sh"
 
 MT5="$MT5_CMD"
 [[ -x "$MT5" ]] || MT5="$(command -v mt5 2>/dev/null || true)"
@@ -144,10 +146,8 @@ place_primary_orders() {
     echo "get_price failed: $PRICE_JSON" >&2
     return 1
   fi
-  MID_PRICE=$(echo "$PRICE_JSON" | jq -er 'if (.last | tonumber) > 0 then .last else (.bid + .ask) / 2 end')
-  echo "[$RUN_TAG] EMA ${PERIOD} ${METHOD}: ${EMA_PRICE}  |  mid: ${MID_PRICE}"
+  MID_PRICE=$(primary_regime_mid_price "$PRICE_JSON") || return 1
 
-  echo "[$RUN_TAG] get_orders ${SYMBOL}"
   ORDERS_JSON=$(mt5_step get_orders "$SYMBOL") || {
     echo "get_orders failed: $ORDERS_JSON" >&2
     return 1
@@ -157,31 +157,7 @@ place_primary_orders() {
     return 1
   fi
 
-  primary_exists() {
-    local otype="$1" magic="$2"
-    echo "$ORDERS_JSON" | jq -e --arg t "$otype" --argjson m "$magic" --arg c "$COMMENT" \
-      '[.orders[]? | select(.type == $t and .magic == $m and .comment == $c)] | length > 0' >/dev/null
-  }
-
-  place_primary_if_missing() {
-    local otype="$1" magic="$2"
-    if primary_exists "$otype" "$magic"; then
-      echo "skip $otype (magic $magic) — PRIMARY already pending"
-      return 0
-    fi
-    echo "place $otype @ $EMA_PRICE (magic $magic)"
-    mt5_step open_order "$SYMBOL" "$otype" "$PRIMARY_VOLUME" "$EMA_PRICE" "$magic" 0 0 "$COMMENT"
-  }
-
-  if awk -v p="$MID_PRICE" -v e="$EMA_PRICE" 'BEGIN { exit !(p > e) }'; then
-    echo "regime: price above EMA → buy_limit, sell_stop"
-    place_primary_if_missing buy_limit "$BUY_MAGIC"
-    place_primary_if_missing sell_stop "$SELL_MAGIC"
-  else
-    echo "regime: price at/below EMA → sell_limit, buy_stop"
-    place_primary_if_missing sell_limit "$SELL_MAGIC"
-    place_primary_if_missing buy_stop "$BUY_MAGIC"
-  fi
+  sync_primary_regime_at_ema "$EMA_PRICE" "$ORDERS_JSON" "$MID_PRICE"
 }
 
 cmd_start() {
