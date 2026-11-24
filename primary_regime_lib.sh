@@ -11,6 +11,11 @@ _mt5_primary() {
   fi
 }
 
+json_ok_positions() {
+  local raw="$1"
+  echo "$raw" | jq -e .ok >/dev/null 2>&1
+}
+
 primary_regime_mid_price() {
   local price_json="$1"
   echo "$price_json" | jq -er 'if (.last | tonumber) > 0 then .last else (.bid + .ask) / 2 end'
@@ -91,6 +96,36 @@ price_differs() {
     'BEGIN { d = a - b; if (d < 0) d = -d; exit (d >= e) ? 0 : 1 }'
 }
 
+any_primary_position_open() {
+  local positions_raw="$1"
+  echo "$positions_raw" | jq -e --arg c "$COMMENT" --argjson buy "$BUY_MAGIC" --argjson sell "$SELL_MAGIC" \
+    --argjson vmin "$PRIMARY_VOLUME_MIN" --argjson vmax "$PRIMARY_VOLUME_MAX" \
+    '[.positions[]? | select(
+      .comment == $c and ((.magic == $buy) or (.magic == $sell))
+      and ((.volume | tonumber) >= $vmin and (.volume | tonumber) <= $vmax)
+    )] | length > 0' >/dev/null
+}
+
+cancel_all_primary_pendings() {
+  local orders_raw="$1" reason="$2"
+  local row ticket otype magic
+  while IFS= read -r row; do
+    [[ -z "$row" ]] && continue
+    ticket=$(echo "$row" | jq -r .ticket)
+    otype=$(echo "$row" | jq -r .type)
+    magic=$(echo "$row" | jq -r .magic)
+    echo "cancel PRIMARY pending ticket $ticket $otype magic $magic ($reason)"
+    _mt5_primary close_order "$ticket" >/dev/null || \
+      echo "warn: close_order $ticket failed" >&2
+  done < <(echo "$orders_raw" | jq -c \
+    --arg c "$COMMENT" --argjson buy "$BUY_MAGIC" --argjson sell "$SELL_MAGIC" \
+    --argjson vmin "$PRIMARY_VOLUME_MIN" --argjson vmax "$PRIMARY_VOLUME_MAX" \
+    '.orders[]? | select(
+      .comment == $c and ((.magic == $buy) or (.magic == $sell))
+      and ((.volume | tonumber) >= $vmin and (.volume | tonumber) <= $vmax)
+    )')
+}
+
 orders_has_primary_at_price() {
   local orders_raw="$1" otype="$2" magic="$3" target_price="$4"
   echo "$orders_raw" | jq -e \
@@ -104,10 +139,24 @@ orders_has_primary_at_price() {
     )] | length > 0' >/dev/null
 }
 
-# Keep two regime pendings on EMA; cancel wrong-type; place missing; reprice to EMA.
+# EMA pendings only while fully flat (no PRIMARY buy or sell position). Manual delete → both recreated.
 sync_primary_regime_at_ema() {
   local ema_price="$1" orders_raw="$2" mid_price="$3"
-  local otype magic row ticket oprice stale ema_px
+  local otype magic row ticket oprice stale ema_px positions_raw
+
+  if ! positions_raw=$(_mt5_primary get_positions "$SYMBOL"); then
+    echo "warn: get_positions failed — skip PRIMARY pending sync (will not place one leg blind)" >&2
+    return 1
+  fi
+  if ! json_ok_positions "$positions_raw"; then
+    echo "warn: positions not ok — skip PRIMARY pending sync" >&2
+    return 1
+  fi
+  if any_primary_position_open "$positions_raw"; then
+    echo "PRIMARY deal running — keep flat before EMA pair; cancel pendings only (no buy-only/sell-only place)"
+    cancel_all_primary_pendings "$orders_raw" "PRIMARY position open"
+    return 0
+  fi
 
   load_symbol_quote_spec || ema_px="$ema_price"
   ema_px=$(round_to_symbol_digits "$ema_price") || ema_px="$ema_price"
@@ -122,6 +171,16 @@ sync_primary_regime_at_ema() {
   done < <(list_stale_regime_primaries "$orders_raw" "$mid_price" "$ema_px")
 
   orders_raw=$(_mt5_primary get_orders "$SYMBOL") || return 1
+
+  if ! positions_raw=$(_mt5_primary get_positions "$SYMBOL"); then
+    echo "warn: get_positions failed after stale cleanup — skip place" >&2
+    return 1
+  fi
+  if any_primary_position_open "$positions_raw"; then
+    echo "PRIMARY opened during sync — cancel pendings, no partial place"
+    cancel_all_primary_pendings "$orders_raw" "position opened"
+    return 0
+  fi
 
   while read -r otype magic; do
     [[ -z "$otype" ]] && continue
