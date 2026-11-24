@@ -143,13 +143,70 @@ jq_position_exists() {
     '[.positions[]? | select(.comment == $c)] | length > 0' >/dev/null
 }
 
-# Grid only when PRIMARY (this magic) is open and floating P/L < 0.
-primary_is_losing() {
-  local profit
-  profit=$(echo "$_CACHE_POS_JSON" | jq -r --arg c "$COMMENT" --argjson m "$MAGIC" \
-    '.positions[]? | select(.comment == $c and .magic == $m) | .profit' | head -1)
-  [[ -n "$profit" && "$profit" != "null" ]] || return 1
-  [[ "$(echo "$profit < 0" | bc -l)" -eq 1 ]]
+primary_position_row() {
+  echo "$_CACHE_POS_JSON" | jq -c --arg c "$COMMENT" --argjson m "$MAGIC" \
+    '.positions[]? | select(.comment == $c and .magic == $m)' | head -1
+}
+
+position_favor_points() {
+  local row="$1" point="$2"
+  echo "$row" | jq -r --argjson pt "$point" \
+    'if .type == "buy" then ((.price_current - .price_open) / $pt)
+     elif .type == "sell" then ((.price_open - .price_current) / $pt)
+     else 0 end'
+}
+
+# Points underwater (0 if PRIMARY is flat or winning).
+primary_adverse_points() {
+  local row="$1" point="$2" favor
+  [[ -n "$row" ]] || { echo 0; return; }
+  favor=$(position_favor_points "$row" "$point")
+  [[ "$favor" =~ ^-?[0-9]+([.][0-9]+)?$ ]] || { echo 0; return; }
+  if [[ "$(echo "$favor < 0" | bc -l)" -eq 1 ]]; then
+    awk -v f="$favor" 'BEGIN { printf "%.2f", -f }'
+  else
+    echo 0
+  fi
+}
+
+grid_leg_position_exists() {
+  local level lcomment
+  for ((level = 1; level <= MAX_LEVEL; level++)); do
+    lcomment="L${level}"
+    if jq_position_exists "$lcomment"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Filled grid leg required before basket close (at least L1).
+grid_basket_close_allowed() {
+  jq_position_exists "L1"
+}
+
+cancel_pending_by_comment() {
+  local comment="$1" ticket
+  ticket=$(echo "$_CACHE_ORD_JSON" | jq -r --arg c "$comment" \
+    '.orders[]? | select(.comment == $c) | .ticket' | head -1)
+  [[ -n "$ticket" && "$ticket" != "null" ]] || return 0
+  echo "cancel pending $comment (ticket $ticket)"
+  mt5_retry "$MT5_CMD" close_order "$ticket" >/dev/null || \
+    echo "warn: close_order $ticket failed" >&2
+}
+
+# Drop unfilled grid limits when PRIMARY has not reached arm threshold (no legs filled yet).
+disarm_pending_grid() {
+  local level lcomment
+  if grid_leg_position_exists; then
+    return 0
+  fi
+  for ((level = 1; level <= MAX_LEVEL; level++)); do
+    lcomment="L${level}"
+    if jq_pending_exists "$lcomment"; then
+      cancel_pending_by_comment "$lcomment"
+    fi
+  done
 }
 
 jq_pending_exists() {
@@ -266,13 +323,9 @@ grid_place_blocked() {
 
 # One pending grid leg at a time; uses caches only (no duplicate API hammering).
 advance_grid() {
-  local point level prev_comment ref price vol lcomment
+  local point level prev_comment ref price vol lcomment row adverse
 
   if ! jq_position_exists "$COMMENT"; then
-    return 0
-  fi
-  if ! primary_is_losing; then
-    echo "grid idle (magic $MAGIC) — $COMMENT not losing; maintainer trails winner"
     return 0
   fi
 
@@ -280,6 +333,26 @@ advance_grid() {
     echo "warn: get_price failed — skip grid advance" >&2
     return 0
   }
+
+  row=$(primary_position_row)
+  adverse=$(primary_adverse_points "$row" "$point")
+  profit=$(echo "$row" | jq -r .profit)
+
+  if [[ "$profit" =~ ^-?[0-9]+([.][0-9]+)?$ ]] \
+    && [[ "$(echo "$profit >= 0" | bc -l)" -eq 1 ]] \
+    && ! grid_leg_position_exists; then
+    disarm_pending_grid
+    echo "grid idle (magic $MAGIC) — $COMMENT in profit; no basket/grid on PRIMARY alone"
+    return 0
+  fi
+
+  if ! grid_leg_position_exists; then
+    if [[ "$(echo "$adverse < $TC_GRID_ARM_LOSS_PTS" | bc -l)" -eq 1 ]]; then
+      disarm_pending_grid
+      echo "grid idle (magic $MAGIC) — ${COMMENT} adverse ${adverse} pts < arm ${TC_GRID_ARM_LOSS_PTS}"
+      return 0
+    fi
+  fi
 
   for ((level = 1; level <= MAX_LEVEL; level++)); do
     if [[ $level -eq 1 ]]; then
@@ -331,7 +404,7 @@ close_basket_and_report() {
 }
 
 tc_grid_main() {
-  echo "[$RUN_TAG] TC grid $SIDE magic=$MAGIC GAP=${GAP}pts max=L${MAX_LEVEL} — grid only if $COMMENT losing; maintainer trails winners"
+  echo "[$RUN_TAG] TC grid $SIDE magic=$MAGIC GAP=${GAP}pts arm=${TC_GRID_ARM_LOSS_PTS}pts max=L${MAX_LEVEL} — L1+ only when armed; close basket only with L1+ filled"
   reset_session_stats
   while true; do
     local pnl target
@@ -345,9 +418,10 @@ tc_grid_main() {
     pnl=$(basket_pnl_from_cache)
     note_session_float_extremes "$pnl"
     target=$(basket_target)
-    echo "PNL (magic $MAGIC): $pnl  session_best: $(session_float_label best)  session_worst: $(session_float_label worst)  target: $target"
+    echo "PNL (magic $MAGIC): $pnl  session_best: $(session_float_label best)  session_worst: $(session_float_label worst)  target: $target  grid_close_ok=$(grid_basket_close_allowed && echo yes || echo no)"
 
-    if [[ "$pnl" =~ ^-?[0-9]+([.][0-9]+)?$ ]] \
+    if grid_basket_close_allowed \
+      && [[ "$pnl" =~ ^-?[0-9]+([.][0-9]+)?$ ]] \
       && [[ "$(echo "$pnl >= $target" | bc -l)" -eq 1 ]]; then
       close_basket_and_report
     fi
