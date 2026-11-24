@@ -16,6 +16,23 @@ primary_regime_mid_price() {
   echo "$price_json" | jq -er 'if (.last | tonumber) > 0 then .last else (.bid + .ask) / 2 end'
 }
 
+# Broker digits/point for SYMBOL (cached per sync tick).
+_SYMBOL_DIGITS=""
+_SYMBOL_POINT=""
+
+load_symbol_quote_spec() {
+  local raw
+  raw=$(_mt5_primary get_price "$SYMBOL") || return 1
+  _SYMBOL_DIGITS=$(echo "$raw" | jq -er '.digits // 2')
+  _SYMBOL_POINT=$(echo "$raw" | jq -er '.point // 0.01')
+}
+
+round_to_symbol_digits() {
+  local price="$1"
+  [[ -n "$_SYMBOL_DIGITS" ]] || load_symbol_quote_spec || return 1
+  awk -v p="$price" -v d="$_SYMBOL_DIGITS" 'BEGIN { printf "%.*f", d, p + 0 }'
+}
+
 # Prints lines: order_type magic
 primary_regime_required_pairs() {
   local mid="$1" ema="$2"
@@ -90,7 +107,11 @@ orders_has_primary_at_price() {
 # Keep two regime pendings on EMA; cancel wrong-type; place missing; reprice to EMA.
 sync_primary_regime_at_ema() {
   local ema_price="$1" orders_raw="$2" mid_price="$3"
-  local otype magic row ticket oprice stale
+  local otype magic row ticket oprice stale ema_px
+
+  load_symbol_quote_spec || ema_px="$ema_price"
+  ema_px=$(round_to_symbol_digits "$ema_price") || ema_px="$ema_price"
+  echo "PRIMARY target EMA (raw $ema_price → $ema_px, digits=${_SYMBOL_DIGITS:-?})"
 
   while IFS= read -r stale; do
     [[ -z "$stale" ]] && continue
@@ -98,7 +119,7 @@ sync_primary_regime_at_ema() {
     echo "cancel wrong-regime PRIMARY ticket $ticket $(echo "$stale" | jq -r .type)"
     _mt5_primary close_order "$ticket" >/dev/null || \
       echo "warn: close_order $ticket failed" >&2
-  done < <(list_stale_regime_primaries "$orders_raw" "$mid_price" "$ema_price")
+  done < <(list_stale_regime_primaries "$orders_raw" "$mid_price" "$ema_px")
 
   orders_raw=$(_mt5_primary get_orders "$SYMBOL") || return 1
 
@@ -106,42 +127,42 @@ sync_primary_regime_at_ema() {
     [[ -z "$otype" ]] && continue
     row=$(primary_order_row "$orders_raw" "$otype" "$magic")
     if [[ -z "$row" ]]; then
-      if orders_has_primary_at_price "$orders_raw" "$otype" "$magic" "$ema_price"; then
+      if orders_has_primary_at_price "$orders_raw" "$otype" "$magic" "$ema_px"; then
         echo "skip place $otype magic $magic — already at EMA"
         continue
       fi
-      echo "place $otype @ $ema_price (magic $magic)"
-      _mt5_primary open_order "$SYMBOL" "$otype" "$PRIMARY_VOLUME" "$ema_price" "$magic" 0 0 "$COMMENT"
+      echo "place $otype @ $ema_px (magic $magic)"
+      _mt5_primary open_order "$SYMBOL" "$otype" "$PRIMARY_VOLUME" "$ema_px" "$magic" 0 0 "$COMMENT"
       orders_raw=$(_mt5_primary get_orders "$SYMBOL") || return 1
       continue
     fi
 
     ticket=$(echo "$row" | jq -r .ticket)
     oprice=$(echo "$row" | jq -r .price)
-    if ! price_differs "$oprice" "$ema_price"; then
+    if ! price_differs "$oprice" "$ema_px"; then
       echo "ok ticket $ticket $otype @ $oprice (within ${PRICE_EPS} of EMA)"
       continue
     fi
 
-    if orders_has_primary_at_price "$orders_raw" "$otype" "$magic" "$ema_price"; then
+    if orders_has_primary_at_price "$orders_raw" "$otype" "$magic" "$ema_px"; then
       echo "cancel stale ticket $ticket $otype magic $magic @ $oprice — already at EMA"
       _mt5_primary close_order "$ticket" >/dev/null || echo "warn: close_order $ticket failed" >&2
       continue
     fi
 
-    echo "reprice ticket $ticket $otype magic $magic: $oprice -> $ema_price"
+    echo "reprice ticket $ticket $otype magic $magic: $oprice -> $ema_px"
     _mt5_primary close_order "$ticket" >/dev/null || {
       echo "warn: close_order $ticket failed" >&2
       continue
     }
     orders_raw=$(_mt5_primary get_orders "$SYMBOL") || return 1
-    if orders_has_primary_at_price "$orders_raw" "$otype" "$magic" "$ema_price"; then
+    if orders_has_primary_at_price "$orders_raw" "$otype" "$magic" "$ema_px"; then
       echo "skip place $otype magic $magic — active order already at EMA"
       continue
     fi
-    _mt5_primary open_order "$SYMBOL" "$otype" "$PRIMARY_VOLUME" "$ema_price" "$magic" 0 0 "$COMMENT"
+    _mt5_primary open_order "$SYMBOL" "$otype" "$PRIMARY_VOLUME" "$ema_px" "$magic" 0 0 "$COMMENT"
     orders_raw=$(_mt5_primary get_orders "$SYMBOL") || return 1
-  done < <(primary_regime_required_pairs "$mid_price" "$ema_price")
+  done < <(primary_regime_required_pairs "$mid_price" "$ema_px")
 
   return 0
 }

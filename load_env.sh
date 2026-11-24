@@ -47,8 +47,14 @@ if [[ -z "${EMA_CANDLE_COUNT:-}" ]]; then
   elif [[ -n "${EMA_BARS_MULT:-}" ]]; then
     EMA_CANDLE_COUNT=$((PERIOD * EMA_BARS_MULT))
   else
-    EMA_CANDLE_COUNT=$((PERIOD + 50))
+  # Too few bars skew EMA (e.g. 250 vs 600 for period 200 differs by several points).
+    EMA_CANDLE_COUNT=$((PERIOD * 10))
+    (( EMA_CANDLE_COUNT < 600 )) && EMA_CANDLE_COUNT=600
+    (( EMA_CANDLE_COUNT > 5000 )) && EMA_CANDLE_COUNT=5000
   fi
+fi
+if (( EMA_CANDLE_COUNT < PERIOD + 50 )); then
+  _load_env_fatal "EMA_CANDLE_COUNT ($EMA_CANDLE_COUNT) too low for PERIOD $PERIOD"
 fi
 # Legacy name used in logs; candle fetch count is EMA_CANDLE_COUNT.
 EMA_BARS=$EMA_CANDLE_COUNT
