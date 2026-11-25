@@ -201,10 +201,37 @@ disarm_pending_grid() {
   if grid_leg_position_exists; then
     return 0
   fi
+  cancel_all_grid_pending_limits
+}
+
+# Cancel every pending L1..L{MAX_LEVEL} for this magic (VPS may leave limits after closeGridBasket).
+cancel_all_grid_pending_limits() {
+  local level lcomment
+  for ((level = 1; level <= MAX_LEVEL; level++)); do
+    lcomment="L${level}"
+    while jq_pending_exists "$lcomment"; do
+      cancel_pending_by_comment "$lcomment"
+      refresh_orders_cache || break
+    done
+  done
+}
+
+basket_has_open_positions() {
+  jq_position_exists "$COMMENT" || grid_leg_position_exists
+}
+
+# After basket close, or API partial close: flat basket but L3/L4 limits still sitting.
+cleanup_orphan_grid_pendings() {
+  local level lcomment
+  if basket_has_open_positions; then
+    return 0
+  fi
   for ((level = 1; level <= MAX_LEVEL; level++)); do
     lcomment="L${level}"
     if jq_pending_exists "$lcomment"; then
-      cancel_pending_by_comment "$lcomment"
+      echo "orphan grid pending $lcomment with no basket positions — cleanup"
+      cancel_all_grid_pending_limits
+      return 0
     fi
   done
 }
@@ -389,14 +416,20 @@ advance_grid() {
 }
 
 close_basket_and_report() {
-  local bal_before bal_after delta elapsed target
+  local bal_before bal_after delta elapsed target close_raw
   target=$(basket_target)
   elapsed=$(($(date +%s) - SESSION_START))
   bal_before=$(account_balance)
-  mt5_retry "$MT5_CMD" close_grid_basket "$SYMBOL" "$MAGIC"
+  close_raw=$(mt5_retry "$MT5_CMD" close_grid_basket "$SYMBOL" "$MAGIC")
+  echo "$close_raw"
   bal_after=$(account_balance)
   delta=$(echo "$bal_after - $bal_before" | bc -l)
   echo "close_grid_basket (magic $MAGIC $SIDE): balance before=$bal_before after=$bal_after delta=$delta"
+  refresh_positions_cache || true
+  if refresh_orders_cache; then
+    cleanup_orphan_grid_pendings
+    cancel_all_grid_pending_limits
+  fi
   echo "session summary: session_best=$(session_float_label best) session_worst=$(session_float_label worst) target_used=$target (max($TARGETBASKET, ${BASKET_PCT}×|worst|)) runtime=$(format_duration "$elapsed")"
   reset_session_stats
   LAST_GRID_PLACE_COMMENT=""
@@ -427,6 +460,7 @@ tc_grid_main() {
     fi
 
     if refresh_orders_cache; then
+      cleanup_orphan_grid_pendings
       advance_grid
     else
       echo "warn: skip grid advance — orders unavailable" >&2
