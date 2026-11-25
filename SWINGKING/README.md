@@ -30,7 +30,9 @@ Uses `../var.env` for VPS (`MT5_HOST`, API key). Edit `swingking.env` for symbol
 | Mitigation Close | `OB_MITI` |
 | Hide overlap Recent | `HIDE_OVERLAP`, `OVERLAP_KEEP` |
 
-Zones are **active** (not mitigated by price). Compare levels to TradingView; VPS candle history may differ slightly from the chart feed.
+Zones are **active** (not mitigated). Mitigation runs on **every bar after** the OB forms (Close / Wick / Avg), same as Pine — old demand blocks far above today’s price should disappear after price trades through them. **Supply** zones above price can stay active until price rallies through the top (also like TV).
+
+`swingking.env` matches your TV screenshot: Window 5000, Swing 100, MS length 5, OB last 5, Length 5, Mitigation Close, Hide overlap Recent.
 
 ## Output shape
 

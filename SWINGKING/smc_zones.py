@@ -138,30 +138,67 @@ def overlap_filter(blocks: list[OrderBlock], keep_recent: bool) -> list[OrderBlo
     return out
 
 
-def mitigate(blocks: list[OrderBlock], opens: list[float], highs: list[float], lows: list[float], closes: list[float], method: str):
+def _bar_mitigates_ob(ob: OrderBlock, o: float, h: float, l: float, c: float, method: str) -> bool:
+    if ob.bull:
+        if method == "Close":
+            return min(c, o) < ob.btm
+        if method == "Wick":
+            return l < ob.btm
+        return l < ob.avg
+    if method == "Close":
+        return max(c, o) > ob.top
+    if method == "Wick":
+        return h > ob.top
+    return h > ob.avg
+
+
+def mitigate_through_bar(
+    blocks: list[OrderBlock],
+    bar: int,
+    opens: list[float],
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+    method: str,
+) -> None:
+    """Pine: mitigation on each confirmed bar after the OB forms."""
     for ob in blocks:
-        if ob.mitigated:
+        if ob.mitigated or bar <= ob.bar_index:
             continue
-        idx = ob.bar_index
-        if idx < 0 or idx >= len(closes):
-            continue
-        o, h, l, c = opens[idx], highs[idx], lows[idx], closes[idx]
-        if ob.bull:
-            if method == "Close":
-                hit = min(c, o) < ob.btm
-            elif method == "Wick":
-                hit = l < ob.btm
-            else:
-                hit = l < ob.avg
-        else:
-            if method == "Close":
-                hit = max(c, o) > ob.top
-            elif method == "Wick":
-                hit = h > ob.top
-            else:
-                hit = h > ob.avg
-        if hit:
+        if _bar_mitigates_ob(ob, opens[bar], highs[bar], lows[bar], closes[bar], method):
             ob.mitigated = True
+
+
+def overlap_bull_bear(
+    bull: list[OrderBlock],
+    bear: list[OrderBlock],
+    keep_recent: bool,
+) -> tuple[list[OrderBlock], list[OrderBlock]]:
+    if not bull or not bear:
+        return bull, bear
+    b, r = list(bull), list(bear)
+
+    def overlaps(a: OrderBlock, b: OrderBlock) -> bool:
+        return not (a.btm > b.top or a.top < b.btm)
+
+    changed = True
+    while changed:
+        changed = False
+        for i in range(len(b) - 1, -1, -1):
+            if b and r and overlaps(b[i if not keep_recent else 0], r[0]):
+                idx = i if keep_recent else 0
+                b.pop(idx)
+                changed = True
+                break
+        if changed:
+            continue
+        for i in range(len(r) - 1, -1, -1):
+            if b and r and overlaps(r[i if not keep_recent else 0], b[0]):
+                idx = i if keep_recent else 0
+                r.pop(idx)
+                changed = True
+                break
+    return b, r
 
 
 def run_smc(
@@ -173,6 +210,7 @@ def run_smc(
     ob_mode: str = "Length",
     ob_miti: str = "Close",
     ms_window: int = 5000,
+    ms_window_enabled: bool = True,
     hide_overlap: bool = True,
     overlap_keep_recent: bool = True,
 ) -> dict[str, Any]:
@@ -188,7 +226,10 @@ def run_smc(
     times = [c.get("time", "") for c in candles]
 
     atr = atr_series(highs, lows, closes, 200)
-    start = max(0, n - ms_window)
+    if ms_window_enabled and ms_window > 0:
+        start = max(0, n - ms_window)
+    else:
+        start = 0
 
     ms = MarketState()
     bull_obs: list[OrderBlock] = []
@@ -320,13 +361,15 @@ def run_smc(
                     ms.temp = cur
                     ms.xloc = cur
 
-    mitigate(bull_obs, opens, highs, lows, closes, ob_miti)
-    mitigate(bear_obs, opens, highs, lows, closes, ob_miti)
+        mitigate_through_bar(bull_obs, cur, opens, highs, lows, closes, ob_miti)
+        mitigate_through_bar(bear_obs, cur, opens, highs, lows, closes, ob_miti)
+
     bull_active = [o for o in bull_obs if not o.mitigated][:ob_last]
     bear_active = [o for o in bear_obs if not o.mitigated][:ob_last]
     if hide_overlap:
         bull_active = overlap_filter(bull_active, overlap_keep_recent)
         bear_active = overlap_filter(bear_active, overlap_keep_recent)
+        bull_active, bear_active = overlap_bull_bear(bull_active, bear_active, overlap_keep_recent)
 
     def pack(obs: list[OrderBlock], kind: str) -> list[dict]:
         total_vol = sum(o.vol for o in obs) or 1.0
@@ -374,6 +417,7 @@ def main():
         ob_mode=str(cfg.get("OB_MODE", "Length")),
         ob_miti=str(cfg.get("OB_MITI", "Close")),
         ms_window=int(cfg.get("MS_WINDOW", 5000)),
+        ms_window_enabled=str(cfg.get("MS_WINDOW_ENABLED", "1")) == "1",
         hide_overlap=str(cfg.get("HIDE_OVERLAP", "1")) == "1",
         overlap_keep_recent=str(cfg.get("OVERLAP_KEEP", "Recent")) == "Recent",
     )
