@@ -98,6 +98,15 @@ Example:
   mt5 get_price BTCUSD
 EOF
       ;;
+    get_candles)
+      cat <<'EOF'
+get_candles — OHLCV bars from VPS (GET /getCandles)
+
+  mt5 get_candles <SYMBOL> [TIMEFRAME] [COUNT]
+
+  COUNT default 3000, max 5000
+EOF
+      ;;
     get_ema)
       cat <<'EOF'
 get_ema — moving average from /getCandles closes (GET + local calc)
@@ -320,6 +329,11 @@ cmd_get_price() {
   api_get "/getPrice?symbol=$(uri_encode "$sym")"
 }
 
+cmd_get_candles() {
+  local sym="${1:?symbol}" tf="${2:-M5}" count="${3:-3000}"
+  api_get "/getCandles?symbol=$(uri_encode "$sym")&timeframe=${tf}&count=${count}"
+}
+
 cmd_get_ema() {
   local sym="${1:?symbol}" period="${2:?period}" method="${3:?EMA|SMMA|LW|SMA}"
   local tf="${4:-M5}" count="${5:-3000}"
@@ -519,6 +533,7 @@ main() {
 
   case "$cmd" in
     get_price)        cmd_get_price "$@" ;;
+    get_candles)      cmd_get_candles "$@" ;;
     get_ema)          cmd_get_ema "$@" ;;
     open_buy)         cmd_open_buy "$@" ;;
     open_sell)        cmd_open_sell "$@" ;;
