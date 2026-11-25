@@ -26,7 +26,8 @@ cfg_json() {
 import json, os
 keys = (
     "MS_LEN", "OB_LAST", "OB_LEN", "OB_MODE", "OB_MITI",
-    "MS_WINDOW", "MS_WINDOW_ENABLED", "HIDE_OVERLAP", "OVERLAP_KEEP",
+    "MS_WINDOW", "MS_WINDOW_ENABLED", "MS_MODE", "BUILD_SWEEP",
+    "HIDE_OVERLAP", "OVERLAP_KEEP",
 )
 print(json.dumps({k: os.environ.get(k, "") for k in keys}))
 PY

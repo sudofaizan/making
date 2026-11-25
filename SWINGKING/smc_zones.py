@@ -96,24 +96,26 @@ def ob_top_bottom(
     ob_mode: str,
     ob_len: int,
 ) -> tuple[float, float, int]:
-    scale = atr[cur] / (5.0 / max(ob_len, 1)) if atr[cur] else 0.0
+    # Pine structure(): uses ta.atr(200) at the OB candle index (not the scaled setup ATR).
     if bull:
-        raw_top = highs[cur - i_bull]
+        bi = cur - i_bull
+        raw_high = highs[bi]
+        raw_low = lows[bi]
         if ob_mode == "Length":
-            adj = highs[cur - i_bull] - scale
-            top = raw_top if lows[cur - i_bull] > adj else adj
+            adj = raw_low + (atr[bi] if bi < len(atr) else 0.0)
+            top = raw_high if adj > raw_high else adj
         else:
-            top = raw_top
-        btm = lows[cur - i_bull]
-        return top, btm, cur - i_bull
-    raw_btm = lows[cur - i_bear]
+            top = raw_high
+        return top, raw_low, bi
+    bi = cur - i_bear
+    raw_high = highs[bi]
+    raw_low = lows[bi]
     if ob_mode == "Length":
-        adj = lows[cur - i_bear] + scale
-        btm = raw_btm if highs[cur - i_bear] < adj else adj
+        adj = raw_high - (atr[bi] if bi < len(atr) else 0.0)
+        btm = raw_low if adj < raw_low else adj
     else:
-        btm = raw_btm
-    top = highs[cur - i_bear]
-    return top, btm, cur - i_bear
+        btm = raw_low
+    return raw_high, btm, bi
 
 
 def overlap_filter(blocks: list[OrderBlock], keep_recent: bool) -> list[OrderBlock]:
@@ -211,6 +213,8 @@ def run_smc(
     ob_miti: str = "Close",
     ms_window: int = 5000,
     ms_window_enabled: bool = True,
+    ms_mode: str = "Adjusted Points",
+    build_sweep: bool = True,
     hide_overlap: bool = True,
     overlap_keep_recent: bool = True,
 ) -> dict[str, Any]:
@@ -226,10 +230,8 @@ def run_smc(
     times = [c.get("time", "") for c in candles]
 
     atr = atr_series(highs, lows, closes, 200)
-    if ms_window_enabled and ms_window > 0:
-        start = max(0, n - ms_window)
-    else:
-        start = 0
+    window_cut = (n - ms_window) if ms_window_enabled and ms_window > 0 else 0
+    loop_start = max(2 * mslen, 1)
 
     ms = MarketState()
     bull_obs: list[OrderBlock] = []
@@ -240,8 +242,9 @@ def run_smc(
     pl_p: list[float] = []
     pl_n: list[int] = []
 
-    up = highs[start]
-    dn = lows[start]
+    up = highs[loop_start]
+    dn = lows[loop_start]
+    adjusted = ms_mode.strip().lower().startswith("adjust")
 
     def add_ob(bull: bool, top: float, btm: float, bi: int):
         ob = OrderBlock(
@@ -258,7 +261,7 @@ def run_smc(
         else:
             bear_obs.insert(0, ob)
 
-    for cur in range(start, n):
+    for cur in range(loop_start, n):
         if cur >= 2 * mslen:
             pi = cur - mslen
             if highs[pi] == max(highs[pi - mslen : pi + mslen + 1]):
@@ -275,10 +278,16 @@ def run_smc(
             pl_p.clear()
             pl_n.clear()
 
-        crossup = highs[cur] > up
-        crossdn = lows[cur] < dn
-        up = max(up, highs[cur])
-        dn = min(dn, lows[cur])
+        crossup = False
+        crossdn = False
+        if highs[cur] > up:
+            up = highs[cur]
+            dn = lows[cur]
+            crossup = True
+        if lows[cur] < dn:
+            up = highs[cur]
+            dn = lows[cur]
+            crossdn = True
 
         if ms.start == 0:
             ms = MarketState(start=1, trend=0, bos=highs[cur], choch=lows[cur], loc=cur, temp=cur, main=highs[cur], xloc=cur)
@@ -288,6 +297,22 @@ def run_smc(
         id_bear = find_idx(highs, lows, ms.loc, cur, True, True)
 
         if ms.start == 1:
+            if (
+                build_sweep
+                and ms.choch is not None
+                and lows[cur] <= ms.choch
+                and closes[cur] >= ms.choch
+            ):
+                ms.choch = lows[cur]
+                ms.xloc = cur
+            if (
+                build_sweep
+                and ms.bos is not None
+                and highs[cur] >= ms.bos
+                and closes[cur] <= ms.bos
+            ):
+                ms.bos = highs[cur]
+                ms.xloc = cur
             if closes[cur] <= ms.choch:
                 top, btm, bi = ob_top_bottom(True, id_bull, id_bear, highs, lows, atr, cur, ob_mode, ob_len)
                 add_ob(True, top, btm, bi)
@@ -316,10 +341,32 @@ def run_smc(
                 if lows[cur] <= ms.main:
                     ms.main = lows[cur]
                     ms.temp = cur
+                if adjusted and cur % (mslen * 2) == 0 and ms.bos is not None and ph_p:
+                    if ph_p[0] < (ms.choch or math.inf):
+                        ms.choch = ph_p[0]
+                        ms.loc = ph_n[0]
+                        ms.xloc = ph_n[0]
+                        ms.temp = ph_n[0]
                 if ms.bos is None and crossup and closes[cur] > opens[cur] and closes[cur - 1] > opens[cur - 1]:
                     ms.bos = ms.main
                     ms.loc = ms.temp
                     ms.xloc = ms.loc
+                if (
+                    build_sweep
+                    and ms.bos is not None
+                    and lows[cur] <= ms.bos
+                    and closes[cur] >= ms.bos
+                ):
+                    ms.bos = lows[cur]
+                    ms.xloc = cur
+                if (
+                    build_sweep
+                    and ms.choch is not None
+                    and highs[cur] >= ms.choch
+                    and closes[cur] <= ms.choch
+                ):
+                    ms.choch = highs[cur]
+                    ms.xloc = cur
                 if ms.bos is not None and closes[cur] <= ms.bos:
                     top, btm, bi = ob_top_bottom(False, id_bull, id_bear, highs, lows, atr, cur, ob_mode, ob_len)
                     add_ob(False, top, btm, bi)
@@ -330,7 +377,11 @@ def run_smc(
                 if closes[cur] >= ms.choch:
                     top, btm, bi = ob_top_bottom(True, id_bull, id_bear, highs, lows, atr, cur, ob_mode, ob_len)
                     add_ob(True, top, btm, bi)
+                    saved_bos = ms.bos
+                    fid = find_idx(highs, lows, ms.loc, cur, False, False)
+                    new_choch = lows[cur - fid] if saved_bos is None else saved_bos
                     ms.bos = None
+                    ms.choch = new_choch
                     ms.main = highs[cur]
                     ms.trend = 1
                     ms.loc = cur
@@ -340,10 +391,32 @@ def run_smc(
                 if highs[cur] >= ms.main:
                     ms.main = highs[cur]
                     ms.temp = cur
+                if adjusted and cur % (mslen * 2) == 0 and ms.bos is not None and pl_p:
+                    if pl_p[0] > (ms.choch or -math.inf):
+                        ms.choch = pl_p[0]
+                        ms.loc = pl_n[0]
+                        ms.xloc = pl_n[0]
+                        ms.temp = pl_n[0]
                 if ms.bos is None and crossdn and closes[cur] < opens[cur] and closes[cur - 1] < opens[cur - 1]:
                     ms.bos = ms.main
                     ms.loc = ms.temp
                     ms.xloc = ms.loc
+                if (
+                    build_sweep
+                    and ms.bos is not None
+                    and highs[cur] >= ms.bos
+                    and closes[cur] <= ms.bos
+                ):
+                    ms.bos = highs[cur]
+                    ms.xloc = cur
+                if (
+                    build_sweep
+                    and ms.choch is not None
+                    and lows[cur] <= ms.choch
+                    and closes[cur] >= ms.choch
+                ):
+                    ms.choch = lows[cur]
+                    ms.xloc = cur
                 if ms.bos is not None and closes[cur] >= ms.bos:
                     top, btm, bi = ob_top_bottom(True, id_bull, id_bear, highs, lows, atr, cur, ob_mode, ob_len)
                     add_ob(True, top, btm, bi)
@@ -354,7 +427,11 @@ def run_smc(
                 if closes[cur] <= ms.choch:
                     top, btm, bi = ob_top_bottom(False, id_bull, id_bear, highs, lows, atr, cur, ob_mode, ob_len)
                     add_ob(False, top, btm, bi)
+                    saved_bos = ms.bos
+                    fid = find_idx(highs, lows, ms.loc, cur, True, False)
+                    new_choch = highs[cur - fid] if saved_bos is None else saved_bos
                     ms.bos = None
+                    ms.choch = new_choch
                     ms.main = lows[cur]
                     ms.trend = -1
                     ms.loc = cur
@@ -364,8 +441,15 @@ def run_smc(
         mitigate_through_bar(bull_obs, cur, opens, highs, lows, closes, ob_miti)
         mitigate_through_bar(bear_obs, cur, opens, highs, lows, closes, ob_miti)
 
-    bull_active = [o for o in bull_obs if not o.mitigated][:ob_last]
-    bear_active = [o for o in bear_obs if not o.mitigated][:ob_last]
+    def active_recent(blocks: list[OrderBlock]) -> list[OrderBlock]:
+        live = [o for o in blocks if not o.mitigated]
+        live.sort(key=lambda o: o.bar_index, reverse=True)
+        if window_cut > 0:
+            live = [o for o in live if o.bar_index >= window_cut]
+        return live[:ob_last]
+
+    bull_active = active_recent(bull_obs)
+    bear_active = active_recent(bear_obs)
     if hide_overlap:
         bull_active = overlap_filter(bull_active, overlap_keep_recent)
         bear_active = overlap_filter(bear_active, overlap_keep_recent)
@@ -418,6 +502,8 @@ def main():
         ob_miti=str(cfg.get("OB_MITI", "Close")),
         ms_window=int(cfg.get("MS_WINDOW", 5000)),
         ms_window_enabled=str(cfg.get("MS_WINDOW_ENABLED", "1")) == "1",
+        ms_mode=str(cfg.get("MS_MODE", "Adjusted Points")),
+        build_sweep=str(cfg.get("BUILD_SWEEP", "1")) == "1",
         hide_overlap=str(cfg.get("HIDE_OVERLAP", "1")) == "1",
         overlap_keep_recent=str(cfg.get("OVERLAP_KEEP", "Recent")) == "Recent",
     )
