@@ -64,12 +64,12 @@ find_psw_ack_ticket() {
   ack_type="${PSW_ACK_ORDER_TYPE:-buy_stop}"
   raw=$(psw_mt5_retry get_orders "$SYMBOL") || return 1
   echo "$raw" | jq -er --arg t "$ack_type" --argjson v "$vol" --argjson e "$eps" \
-    --arg c "${PSW_COMMENT:-PSW}" --arg pc "${COMMENT:-PRIMARY}" '
+    --arg c "${PSW_COMMENT:-PSW}" '
     [.orders[]?
       | select(.type == $t)
       | select((.volume - $v | if . < 0 then -. else . end) <= $e)
-      | select(.comment != $c and .comment != $pc)
-      | select(.comment | test("^L[0-9]+$") | not)
+      | select((.comment // "") != $c)
+      | select((.comment // "") | test("^L[0-9]+$") | not)
     ][0].ticket // empty'
 }
 

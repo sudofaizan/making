@@ -14,8 +14,8 @@ Usage: $0 [-e ENV_FILE] {start|stop|restart|ps}
 
   -e ENV_FILE   trading + MT5 settings (default: ${SCRIPT_DIR}/var.env)
 
-  start    — place PRIMARY (regime), nohup maintain_order + TC_BUY + TC_SELL
-  stop     — stop background workers for this RUN_TAG
+  start    — place PRIMARY; workers: maintain_order, TC_BUY, TC_SELL, swingking_ack (PSW)
+  stop     — stop all background workers for this RUN_TAG
   restart  — stop then start
   ps       — show worker PIDs and related processes
 
@@ -67,6 +67,7 @@ WORKERS=(
   "maintain_order:maintain_order.sh"
   "TC_BUY:TC_BUY.sh"
   "TC_SELL:TC_SELL.sh"
+  "swingking_ack:SWINGKING/watch_ack.sh"
 )
 
 pid_file() { echo "${PID_DIR}/${RUN_TAG}_$1.pid"; }
@@ -176,7 +177,7 @@ cmd_start() {
     script="${pair##*:}"
     start_one "$name" "$script"
   done
-  echo "=== started — logs: $(log_file maintain_order) $(log_file TC_BUY) $(log_file TC_SELL) ==="
+  echo "=== started — logs: $(log_file maintain_order) $(log_file TC_BUY) $(log_file TC_SELL) $(log_file swingking_ack) ==="
 }
 
 cmd_stop() {

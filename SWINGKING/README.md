@@ -18,17 +18,19 @@ Uses `../var.env` for VPS (`MT5_HOST`, API key). Edit `swingking.env` for symbol
 | `./swingking.sh mark` | Print zones + write `zones/GOLD-M5-zones.json` |
 | `./swingking.sh json` | JSON only |
 | `./swingking.sh watch` | Refresh on `LOOP_SLEEP` (default 60s) |
-| `./swingking.sh deploy` | **One-shot** PSW limits at 1st buy/sell OB (after ack) |
+| `../init.sh start` | Starts **swingking_ack** (PSW watcher) with TC workers |
+| `./swingking.sh deploy` | Manual one-shot only (debug) |
 | `./swingking.sh reset-psw` | Clear deploy lock when PSW flat |
 
 ### PSW deploy (one-time)
 
-1. Ensure `init.sh start` is running (TC_BUY / TC_SELL manage basket for magic `786`/`788`).
-2. Place a **manual** `buy_stop` **0.14** lot on `GOLD` (ack — any comment except `PRIMARY`/`PSW`/`L*`).
-3. Run `./swingking.sh deploy` — deletes the ack order, prints zones, places:
+1. From repo root: `./init.sh -e var.env start` — workers include **maintain_order**, **TC_BUY**, **TC_SELL**, **swingking_ack** (PSW watcher; log `logs/GOLD/swingking_ack.log`).
+2. Place a **manual** `buy_stop` **0.14** lot on `GOLD` (ack). Comment can be blank; not `PSW` or grid `L*`.
+3. **swingking_ack** polls every `PSW_ACK_POLL_SLEEP` (5s in `var.env`) and auto-deploys once (cancel ack → PSW limits). No `swingking.sh deploy` needed.
+4. Deploy deletes the ack order, prints zones, places:
    - `buy_limit` @ first bullish OB mid, comment **`PSW`**, magic `BUY_MAGIC`, TP **2000** pts
    - `sell_limit` @ first bearish OB mid, comment **`PSW`**, magic `SELL_MAGIC`, TP **2000** pts
-4. Does **not** loop or re-place; state in `zones/.psw_deployed`. After flat, `./swingking.sh reset-psw` then ack + deploy again.
+5. Does **not** re-place until cycle resets; state in `zones/.psw_deployed`. After flat, `./swingking.sh reset-psw` then place ack again.
 
 TC grid treats **`PSW` before `PRIMARY`** (`TC_ANCHOR_COMMENTS` in `var.env`) — same basket close rules as EMA PRIMARY.
 
