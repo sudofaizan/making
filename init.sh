@@ -104,7 +104,11 @@ start_one() {
   fi
   rm -f "$pf"
   echo "start $name ($RUN_TAG) → $lf"
-  nohup env ENV_FILE="$ENV_FILE" bash "$SCRIPT_DIR/$script" >>"$lf" 2>&1 &
+  if [[ "$script" == SWINGKING/* ]]; then
+    nohup env MAKING_ENV_FILE="$ENV_FILE" bash "$SCRIPT_DIR/$script" >>"$lf" 2>&1 &
+  else
+    nohup env ENV_FILE="$ENV_FILE" bash "$SCRIPT_DIR/$script" >>"$lf" 2>&1 &
+  fi
   echo $! >"$pf"
   echo "  pid $(cat "$pf")"
 }

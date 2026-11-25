@@ -5,15 +5,18 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$SCRIPT_DIR" || exit 1
 
-ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/swingking.env}"
-[[ -f "$ENV_FILE" ]] || { echo "missing $ENV_FILE" >&2; exit 1; }
+# SMC settings always from swingking.env (init must not pass ENV_FILE=var.env into this path).
+SMC_ENV="$SCRIPT_DIR/swingking.env"
+[[ -f "$SMC_ENV" ]] || { echo "missing $SMC_ENV" >&2; exit 1; }
 set -a
 # shellcheck disable=SC1090
-source "$ENV_FILE"
+source "$SMC_ENV"
 set +a
 
-ROOT_ENV="${SCRIPT_DIR}/../var.env"
-if [[ -f "$ROOT_ENV" ]]; then
+ROOT_ENV="$(cd "$SCRIPT_DIR/.." && pwd)/var.env"
+if [[ -n "${MAKING_ENV_FILE:-}" && -f "$MAKING_ENV_FILE" ]]; then
+  export ENV_FILE="$MAKING_ENV_FILE"
+elif [[ -f "$ROOT_ENV" ]]; then
   export ENV_FILE="$ROOT_ENV"
 fi
 
