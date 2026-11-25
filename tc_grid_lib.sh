@@ -9,6 +9,9 @@ LAST_GRID_PLACE_TS=0
 _CACHE_POS_JSON=""
 _CACHE_ORD_JSON=""
 
+# Basket anchors: PSW swing limits first, then EMA PRIMARY (same magic per side).
+TC_ANCHOR_COMMENTS_LIST=(${TC_ANCHOR_COMMENTS:-PSW PRIMARY})
+
 if [[ -z "${MT5_CMD:-}" ]]; then
   echo "tc_grid_lib: MT5_CMD required (set in ENV_FILE)" >&2
   exit 1
@@ -144,8 +147,24 @@ jq_position_exists() {
 }
 
 primary_position_row() {
-  echo "$_CACHE_POS_JSON" | jq -c --arg c "$COMMENT" --argjson m "$MAGIC" \
-    '.positions[]? | select(.comment == $c and .magic == $m)' | head -1
+  local c row
+  for c in "${TC_ANCHOR_COMMENTS_LIST[@]}"; do
+    row=$(echo "$_CACHE_POS_JSON" | jq -c --arg c "$c" --argjson m "$MAGIC" \
+      '.positions[]? | select(.comment == $c and .magic == $m)' | head -1)
+    [[ -n "$row" ]] && { echo "$row"; return 0; }
+  done
+  return 1
+}
+
+anchor_comment_for_magic() {
+  local c
+  for c in "${TC_ANCHOR_COMMENTS_LIST[@]}"; do
+    if jq_position_exists "$c"; then
+      echo "$c"
+      return 0
+    fi
+  done
+  return 1
 }
 
 position_favor_points() {
@@ -217,7 +236,11 @@ cancel_all_grid_pending_limits() {
 }
 
 basket_has_open_positions() {
-  jq_position_exists "$COMMENT" || grid_leg_position_exists
+  local c
+  for c in "${TC_ANCHOR_COMMENTS_LIST[@]}"; do
+    jq_position_exists "$c" && return 0
+  done
+  grid_leg_position_exists
 }
 
 # After basket close, or API partial close: flat basket but L3/L4 limits still sitting.
@@ -350,18 +373,16 @@ grid_place_blocked() {
 
 # One pending grid leg at a time; uses caches only (no duplicate API hammering).
 advance_grid() {
-  local point level prev_comment ref price vol lcomment row adverse
+  local point level prev_comment ref price vol lcomment row adverse anchor profit
 
-  if ! jq_position_exists "$COMMENT"; then
-    return 0
-  fi
+  anchor=$(anchor_comment_for_magic) || return 0
 
   point=$(get_point) || {
     echo "warn: get_price failed — skip grid advance" >&2
     return 0
   }
 
-  row=$(primary_position_row)
+  row=$(primary_position_row) || return 0
   adverse=$(primary_adverse_points "$row" "$point")
   profit=$(echo "$row" | jq -r .profit)
 
@@ -369,21 +390,21 @@ advance_grid() {
     && [[ "$(echo "$profit >= 0" | bc -l)" -eq 1 ]] \
     && ! grid_leg_position_exists; then
     disarm_pending_grid
-    echo "grid idle (magic $MAGIC) — $COMMENT in profit; no basket/grid on PRIMARY alone"
+    echo "grid idle (magic $MAGIC) — $anchor in profit; no basket/grid on anchor alone"
     return 0
   fi
 
   if ! grid_leg_position_exists; then
     if [[ "$(echo "$adverse < $TC_GRID_ARM_LOSS_PTS" | bc -l)" -eq 1 ]]; then
       disarm_pending_grid
-      echo "grid idle (magic $MAGIC) — ${COMMENT} adverse ${adverse} pts < arm ${TC_GRID_ARM_LOSS_PTS}"
+      echo "grid idle (magic $MAGIC) — ${anchor} adverse ${adverse} pts < arm ${TC_GRID_ARM_LOSS_PTS}"
       return 0
     fi
   fi
 
   for ((level = 1; level <= MAX_LEVEL; level++)); do
     if [[ $level -eq 1 ]]; then
-      prev_comment=$COMMENT
+      prev_comment=$anchor
     else
       prev_comment="L$((level - 1))"
     fi
@@ -437,7 +458,7 @@ close_basket_and_report() {
 }
 
 tc_grid_main() {
-  echo "[$RUN_TAG] TC grid $SIDE magic=$MAGIC GAP=${GAP}pts arm=${TC_GRID_ARM_LOSS_PTS}pts max=L${MAX_LEVEL} — L1+ only when armed; close basket only with L1+ filled"
+  echo "[$RUN_TAG] TC grid $SIDE magic=$MAGIC anchors=${TC_ANCHOR_COMMENTS:-PSW PRIMARY} GAP=${GAP}pts arm=${TC_GRID_ARM_LOSS_PTS}pts max=L${MAX_LEVEL} — L1+ only when armed; close basket only with L1+ filled"
   reset_session_stats
   while true; do
     local pnl target

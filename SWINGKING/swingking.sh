@@ -12,8 +12,9 @@ set -a
 source "$ENV_FILE"
 set +a
 
-if [[ -f "${SCRIPT_DIR}/../var.env" ]]; then
-  export ENV_FILE="${SCRIPT_DIR}/../var.env"
+ROOT_ENV="${SCRIPT_DIR}/../var.env"
+if [[ -f "$ROOT_ENV" ]]; then
+  export ENV_FILE="$ROOT_ENV"
 fi
 
 MT5="${MT5_CMD:-../mt5}"
@@ -83,15 +84,82 @@ cmd_watch() {
   done
 }
 
+load_trading_env() {
+  [[ -f "${ENV_FILE:-$ROOT_ENV}" ]] || { echo "missing trading env (var.env)" >&2; exit 1; }
+  # shellcheck source=../load_env.sh
+  source "${SCRIPT_DIR}/../load_env.sh"
+  MT5="$MT5_CMD"
+  [[ -x "$MT5" ]] || MT5="$(cd "$SCRIPT_DIR/.." && pwd)/mt5"
+  export MT5
+  # shellcheck source=psw_lib.sh
+  source "${SCRIPT_DIR}/psw_lib.sh"
+}
+
+cmd_deploy() {
+  local force=0 ticket zones_json
+  [[ "${1:-}" == "--force" ]] && force=1
+
+  load_trading_env
+
+  if [[ $force -eq 0 ]] && psw_already_deployed; then
+    if ! psw_flat; then
+      echo "PSW already deployed (state file exists) — still have PSW orders/positions; not placing again" >&2
+      echo "Use: $0 reset-psw when flat, or $0 deploy --force after manual ack" >&2
+      exit 1
+    fi
+    echo "PSW state file present but flat — clearing stale state"
+    psw_clear_state
+  fi
+
+  ticket=$(find_psw_ack_ticket) || ticket=""
+  if [[ -z "$ticket" ]]; then
+    echo "No ack order: place manual ${PSW_ACK_ORDER_TYPE:-buy_stop} vol=${PSW_ACK_VOLUME:-0.14} on $SYMBOL, then run deploy again" >&2
+    exit 1
+  fi
+
+  echo "Ack: delete manual order ticket $ticket (${PSW_ACK_ORDER_TYPE:-buy_stop} ${PSW_ACK_VOLUME:-0.14})"
+  psw_mt5_retry close_order "$ticket" >/dev/null || {
+    echo "failed to cancel ack order $ticket" >&2
+    exit 1
+  }
+
+  zones_json=$(fetch_and_compute) || exit 1
+  print_human "$zones_json"
+  save_json "$zones_json"
+
+  cancel_psw_pendings
+  place_psw_ob_limits "$zones_json" || {
+    echo "PSW placement failed" >&2
+    exit 1
+  }
+
+  psw_mark_deployed
+  echo "PSW deploy done (one-shot). TC workers use magic ${BUY_MAGIC}/${SELL_MAGIC} + comment ${PSW_COMMENT:-PSW} for basket/grid."
+}
+
+cmd_reset_psw() {
+  load_trading_env
+  if ! psw_flat; then
+    echo "refuse reset — PSW orders or positions still open" >&2
+    exit 1
+  fi
+  psw_clear_state
+  echo "PSW state cleared — you may ack and deploy again"
+}
+
 usage() {
   cat <<EOF
-Usage: $0 {mark|json|watch}
+Usage: $0 {mark|json|watch|deploy|reset-psw}
 
-  mark   — compute zones, print table + write ${OUT_DIR:-zones}/<SYMBOL>-<TF>-zones.json
-  json   — raw JSON to stdout
-  watch  — loop mark every LOOP_SLEEP seconds
+  mark        — compute zones, print table + write zones JSON
+  json        — raw JSON to stdout
+  watch       — loop mark every LOOP_SLEEP seconds
+  deploy      — one-shot: ack manual ${PSW_ACK_ORDER_TYPE:-buy_stop} (${PSW_ACK_VOLUME:-0.14}), place PSW limits at 1st OB mids
+  reset-psw   — clear deploy lock when no PSW orders/positions (for next ack cycle)
+  deploy --force — clear stale lock when flat, still requires ack order
 
-Config: $ENV_FILE
+Trading: ENV_FILE=${ENV_FILE:-$ROOT_ENV}
+SMC: $ENV_FILE
 EOF
 }
 
@@ -99,6 +167,8 @@ case "${1:-mark}" in
   mark)  cmd_mark ;;
   json)  cmd_json ;;
   watch) cmd_watch ;;
+  deploy) shift; cmd_deploy "$@" ;;
+  reset-psw) cmd_reset_psw ;;
   -h|--help) usage ;;
   *) usage; exit 1 ;;
 esac
