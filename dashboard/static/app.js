@@ -17,6 +17,22 @@ function badgeClass(summary) {
   return "";
 }
 
+function escAttr(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;");
+}
+
+function healthBadge(health) {
+  if (!health) {
+    return '<span class="stack-health stack-health--muted">—</span>';
+  }
+  const level = health.level || "muted";
+  const title = health.detail ? ` title="${escAttr(health.detail)}"` : "";
+  return `<span class="stack-health stack-health--${level}"${title}>${escAttr(health.label)}</span>`;
+}
+
 function workerRow(w) {
   const up = w.running;
   return `<tr>
@@ -58,6 +74,10 @@ function stackCard(stack) {
             <input type="checkbox" class="skip-primary" /> Skip PRIMARY on start
           </label>
         </div>
+      </div>
+      <div class="stack-log-bar">
+        <span class="muted">Broker / logs</span>
+        ${healthBadge(stack.health)}
       </div>
       <table>
         <thead><tr>

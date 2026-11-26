@@ -175,6 +175,57 @@ body {
   color: var(--warn);
 }
 
+.stack-log-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  padding: 0.45rem 1rem;
+  border-bottom: 1px solid var(--border);
+  background: #121820;
+  font-size: 12px;
+}
+
+.stack-log-bar .muted {
+  margin-right: auto;
+}
+
+.stack-health {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0.2rem 0.55rem;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+  max-width: min(100%, 22rem);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stack-health--ok {
+  color: var(--up);
+  background: #14352a;
+  border-color: rgba(61, 214, 140, 0.35);
+}
+
+.stack-health--error {
+  color: #ffb4b8;
+  background: #3a1820;
+  border-color: rgba(240, 113, 120, 0.55);
+}
+
+.stack-health--warn {
+  color: var(--warn);
+  background: #3a2f14;
+  border-color: rgba(255, 193, 7, 0.35);
+}
+
+.stack-health--muted {
+  color: var(--muted);
+  background: #1a2433;
+  border-color: var(--border);
+}
+
 .stack-actions {
   display: flex;
   flex-wrap: wrap;

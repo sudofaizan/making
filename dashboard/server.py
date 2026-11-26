@@ -16,6 +16,7 @@ from http.cookies import SimpleCookie
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import broker_health_lib
 import env_lib
 import stats_lib
 import threading
@@ -278,7 +279,8 @@ class Handler(BaseHTTPRequestHandler):
                 return
             try:
                 data = run_init_json()
-                self._send_json(200, {"ok": True, **data})
+                stacks = broker_health_lib.enrich_stacks(data.get("stacks") or [])
+                self._send_json(200, {"ok": True, **data, "stacks": stacks})
             except Exception as e:
                 self._send_json(500, {"ok": False, "error": str(e)})
             return
