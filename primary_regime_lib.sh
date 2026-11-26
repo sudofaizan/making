@@ -50,24 +50,17 @@ primary_regime_required_pairs() {
   fi
 }
 
+# Pendings: comment + magic + type (grid uses L1..L{n}, not PRIMARY).
 orders_has_primary() {
   local orders_raw="$1" otype="$2" magic="$3"
   echo "$orders_raw" | jq -e --arg t "$otype" --argjson m "$magic" --arg c "$COMMENT" \
-    --argjson vmin "$PRIMARY_VOLUME_MIN" --argjson vmax "$PRIMARY_VOLUME_MAX" \
-    '[.orders[]? | select(
-      .type == $t and .magic == $m and .comment == $c
-      and ((.volume | tonumber) >= $vmin and (.volume | tonumber) <= $vmax)
-    )] | length > 0' >/dev/null
+    '[.orders[]? | select(.type == $t and .magic == $m and .comment == $c)] | length > 0' >/dev/null
 }
 
 primary_order_row() {
   local orders_raw="$1" otype="$2" magic="$3"
   echo "$orders_raw" | jq -c --arg t "$otype" --argjson m "$magic" --arg c "$COMMENT" \
-    --argjson vmin "$PRIMARY_VOLUME_MIN" --argjson vmax "$PRIMARY_VOLUME_MAX" \
-    '.orders[]? | select(
-      .type == $t and .magic == $m and .comment == $c
-      and ((.volume | tonumber) >= $vmin and (.volume | tonumber) <= $vmax)
-    )' | head -1
+    '.orders[]? | select(.type == $t and .magic == $m and .comment == $c)' | head -1
 }
 
 list_stale_regime_primaries() {
@@ -81,11 +74,9 @@ list_stale_regime_primaries() {
   req_json=$(printf '%s\n' "${req_types[@]}" | jq -R . | jq -s .)
   echo "$orders_raw" | jq -c \
     --arg c "$COMMENT" --argjson buy "$BUY_MAGIC" --argjson sell "$SELL_MAGIC" \
-    --argjson vmin "$PRIMARY_VOLUME_MIN" --argjson vmax "$PRIMARY_VOLUME_MAX" \
     --argjson req "$req_json" \
     '.orders[]? | select(
       .comment == $c and ((.magic == $buy) or (.magic == $sell))
-      and ((.volume | tonumber) >= $vmin and (.volume | tonumber) <= $vmax)
       and ((.type as $t | any($req[]; . == $t) | not))
     )'
 }
@@ -119,11 +110,7 @@ cancel_all_primary_pendings() {
       echo "warn: close_order $ticket failed" >&2
   done < <(echo "$orders_raw" | jq -c \
     --arg c "$COMMENT" --argjson buy "$BUY_MAGIC" --argjson sell "$SELL_MAGIC" \
-    --argjson vmin "$PRIMARY_VOLUME_MIN" --argjson vmax "$PRIMARY_VOLUME_MAX" \
-    '.orders[]? | select(
-      .comment == $c and ((.magic == $buy) or (.magic == $sell))
-      and ((.volume | tonumber) >= $vmin and (.volume | tonumber) <= $vmax)
-    )')
+    '.orders[]? | select(.comment == $c and ((.magic == $buy) or (.magic == $sell)))')
 }
 
 # More than one PRIMARY pending on the same leg (otype+magic) — keep best at EMA, cancel the rest.
@@ -135,11 +122,7 @@ cancel_duplicate_primary_legs() {
     [[ -z "$otype" ]] && continue
     rows_json=$(echo "$orders_raw" | jq -c \
       --arg c "$COMMENT" --arg t "$otype" --argjson m "$magic" \
-      --argjson vmin "$PRIMARY_VOLUME_MIN" --argjson vmax "$PRIMARY_VOLUME_MAX" \
-      '[.orders[]? | select(
-        .comment == $c and .type == $t and .magic == $m
-        and ((.volume | tonumber) >= $vmin and (.volume | tonumber) <= $vmax)
-      )]')
+      '[.orders[]? | select(.comment == $c and .type == $t and .magic == $m)]')
     count=$(echo "$rows_json" | jq 'length')
     (( count <= 1 )) && continue
 
@@ -167,10 +150,8 @@ orders_has_primary_at_price() {
   echo "$orders_raw" | jq -e \
     --arg c "$COMMENT" --arg t "$otype" --argjson m "$magic" \
     --arg p "$target_price" --argjson e "$PRICE_EPS" \
-    --argjson vmin "$PRIMARY_VOLUME_MIN" --argjson vmax "$PRIMARY_VOLUME_MAX" \
     '[.orders[]? | select(
       .comment == $c and .type == $t and .magic == $m
-      and ((.volume | tonumber) >= $vmin and (.volume | tonumber) <= $vmax)
       and (((.price - ($p | tonumber)) * (.price - ($p | tonumber))) <= ($e * $e))
     )] | length > 0' >/dev/null
 }
