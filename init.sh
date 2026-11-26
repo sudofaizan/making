@@ -19,9 +19,12 @@ Usage: $0 [-e ENV_FILE] {start|stop|restart|ps}
   restart  — stop then start
   ps       — show worker PIDs and related processes
 
-Env defines RUN_TAG, LOG_DIR, PID_DIR. Example multi-asset:
-  $0 -e var.env start
+Env defines RUN_TAG, LOG_DIR, PID_DIR. Multi-asset (one init per env, same VPS):
+  $0 -e var.env start          # GOLD
+  $0 -e env/ETH.env start     # ETHUSD (separate logs/pids/magics)
   $0 -e env/BTCUSD.env start
+  $0 -e env/ETH.env ps
+  $0 -e env/ETH.env stop
 EOF
 }
 

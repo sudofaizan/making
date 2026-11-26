@@ -33,7 +33,7 @@ psw_round_price() {
 }
 
 psw_state_file() {
-  echo "${PSW_STATE_FILE:-${OUT_DIR:-./zones}/.psw_deployed}"
+  echo "${PSW_STATE_FILE:-${OUT_DIR:-./zones}/.psw_deployed_${RUN_TAG:-default}}"
 }
 
 psw_already_deployed() {
