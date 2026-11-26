@@ -31,6 +31,9 @@ function workerRow(w) {
 function stackCard(stack) {
   const s = stack.summary;
   const bc = badgeClass(s);
+  const envBase = (stack.env_file || "").replace(/^env\//, "").replace(/\.env$/i, "");
+  const envMismatch =
+    stack.env_file && stack.env_file.startsWith("env/") && envBase.toUpperCase() !== (stack.run_tag || "").toUpperCase();
   const deletable = stack.env_file && stack.env_file.startsWith("env/");
   const topClose = deletable
     ? `<header class="stack-card-top"><button type="button" class="stack-close btn-del-stack" data-env="${stack.env_file}" data-up="${s.up}" data-run-tag="${stack.run_tag}" title="Remove stack (stop first if running)" aria-label="Remove stack">X</button></header>`
@@ -44,6 +47,7 @@ function stackCard(stack) {
           <span class="muted">${stack.symbol}</span>
           <span class="badge ${bc}">${s.up}/${s.total} up</span>
           <span class="badge">${stack.env_file}</span>
+          ${envMismatch ? '<span class="badge warn" title="RUN_TAG and env filename differ — create env/' + stack.run_tag + '.env via + Add stack, then stop this card">env mismatch</span>' : ""}
         </div>
         <div class="stack-actions">
           <button type="button" class="btn ghost btn-edit-env" data-env="${stack.env_file}">Edit .env</button>

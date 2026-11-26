@@ -16,6 +16,12 @@ json_ok_positions() {
   echo "$raw" | jq -e .ok >/dev/null 2>&1
 }
 
+# MT5 retcode 10018 — quotes may work but trade session closed.
+mt5_response_market_closed() {
+  local raw="$1"
+  echo "$raw" | jq -e '.result.retcode == 10018 or (.result.comment // "" | test("Market closed"; "i"))' >/dev/null 2>&1
+}
+
 primary_regime_mid_price() {
   local price_json="$1"
   echo "$price_json" | jq -er 'if (.last | tonumber) > 0 then .last else (.bid + .ask) / 2 end'
@@ -215,8 +221,10 @@ _sync_primary_regime_at_ema_impl() {
     return 0
   fi
 
+  local _market_closed=0
   while read -r otype magic; do
     [[ -z "$otype" ]] && continue
+    (( _market_closed )) && break
     row=$(primary_order_row "$orders_raw" "$otype" "$magic")
     if [[ -z "$row" ]]; then
       if orders_has_primary_at_price "$orders_raw" "$otype" "$magic" "$ema_px"; then
@@ -228,6 +236,11 @@ _sync_primary_regime_at_ema_impl() {
       [[ "$otype" == sell* ]] && place_side=sell
       place_out=$(_mt5_primary open_order "$SYMBOL" "$otype" "$PRIMARY_VOLUME" "$ema_px" "$magic" 0 0 "$COMMENT")
       echo "$place_out"
+      if mt5_response_market_closed "$place_out"; then
+        echo "[$RUN_TAG] broker: market closed (retcode 10018) — skip further PRIMARY places this tick"
+        _market_closed=1
+        break
+      fi
       if echo "$place_out" | jq -e .ok >/dev/null 2>&1 && declare -F stats_order_created >/dev/null 2>&1; then
         stats_order_created "$otype" "$place_side" "$COMMENT" "$magic"
       fi
