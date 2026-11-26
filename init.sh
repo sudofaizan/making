@@ -8,6 +8,7 @@ cd "$SCRIPT_DIR" || exit 1
 ENV_FILE=""
 CMD=""
 PS_ALL=0
+PS_JSON=0
 
 usage() {
   cat <<EOF
@@ -18,8 +19,9 @@ Usage: $0 [-e ENV_FILE] {start|stop|restart|ps} [ps options]
   start    — place PRIMARY; workers: maintain_order, TC_BUY, TC_SELL, swingking_ack, log_cleanup
   stop     — stop all background workers for this RUN_TAG
   restart  — stop then start
-  ps       — worker status for one RUN_TAG (use -e or default var.env)
-  ps --all — all stacks: var.env + env/*.env (no -e required)
+  ps           — worker status for one RUN_TAG (use -e or default var.env)
+  ps --all     — all stacks: var.env + env/*.env (no -e required)
+  ps --json    — JSON for one stack; add --all for every env file
 
 Env defines RUN_TAG, LOG_DIR, PID_DIR.   Multi-asset (one init per env, same VPS; start/stop are per RUN_TAG only):
   $0 -e var.env start          # GOLD
@@ -59,6 +61,11 @@ while [[ $# -gt 0 ]]; do
     --all)
       [[ "$CMD" == ps ]] || { echo "init: --all only applies to ps" >&2; usage; exit 1; }
       PS_ALL=1
+      shift
+      ;;
+    --json)
+      [[ "$CMD" == ps ]] || { echo "init: --json only applies to ps" >&2; usage; exit 1; }
+      PS_JSON=1
       shift
       ;;
     -h|--help)
@@ -269,6 +276,11 @@ cmd_start() {
     script="${pair##*:}"
     start_one "$name" "$script"
   done
+  if [[ -f "${SCRIPT_DIR}/stats_store.sh" ]]; then
+    # shellcheck source=stats_store.sh
+    source "${SCRIPT_DIR}/stats_store.sh"
+    stats_session_start || true
+  fi
   echo "=== started — logs: $(log_file maintain_order) $(log_file TC_BUY) $(log_file TC_SELL) $(log_file swingking_ack) $(log_file log_cleanup) ==="
 }
 
@@ -389,6 +401,105 @@ cmd_ps() {
   cmd_ps_for_loaded_env
 }
 
+json_worker_obj() {
+  local name="$1" lf
+  collect_worker_ps "$name"
+  lf=$(log_file "$name")
+  if [[ "$_PS_PID" == "-" ]]; then
+    jq -nc \
+      --arg worker "$name" \
+      --arg status "$_PS_STATUS" \
+      --argjson running "$_PS_RUNNING" \
+      --arg uptime "$_PS_UPTIME" \
+      --arg log "$lf" \
+      '{worker:$worker, status:$status, running:$running, pid:null, uptime:$uptime, log:$log}'
+  else
+    jq -nc \
+      --arg worker "$name" \
+      --arg status "$_PS_STATUS" \
+      --argjson running "$_PS_RUNNING" \
+      --argjson pid "$_PS_PID" \
+      --arg uptime "$_PS_UPTIME" \
+      --arg log "$lf" \
+      '{worker:$worker, status:$status, running:$running, pid:$pid, uptime:$uptime, log:$log}'
+  fi
+}
+
+json_workers_array() {
+  local pair name first=1
+  printf '['
+  for pair in "${WORKERS[@]}"; do
+    name="${pair%%:*}"
+    [[ $first -eq 1 ]] || printf ','
+    first=0
+    json_worker_obj "$name"
+  done
+  printf ']'
+}
+
+json_stack_for_loaded_env() {
+  local env_rel up=0 ex=0 pair name workers
+  env_rel=$(env_file_relpath "$ENV_FILE")
+  workers=$(json_workers_array)
+  for pair in "${WORKERS[@]}"; do
+    name="${pair%%:*}"
+    collect_worker_ps "$name"
+    if [[ "$_PS_RUNNING" == 1 ]]; then up=$((up + 1)); else ex=$((ex + 1)); fi
+  done
+  jq -nc \
+    --arg run_tag "$RUN_TAG" \
+    --arg symbol "$SYMBOL" \
+    --arg env_file "$env_rel" \
+    --arg env_path "$ENV_FILE" \
+    --argjson workers "$workers" \
+    --argjson up "$up" \
+    --argjson ex "$ex" \
+    --argjson total "${#WORKERS[@]}" \
+    '{run_tag:$run_tag, symbol:$symbol, env_file:$env_file, env_path:$env_path,
+      workers:$workers, summary:{up:$up, exited:$ex, total:$total}}'
+}
+
+cmd_ps_json_all() {
+  local ef stacks='[]' total_up=0 total_ex=0 stacks_n=0 stack up ex
+  while IFS= read -r ef; do
+    [[ -z "$ef" ]] && continue
+    stacks_n=$((stacks_n + 1))
+    load_env_for "$ef"
+    stack=$(json_stack_for_loaded_env)
+    stacks=$(echo "$stacks" | jq --argjson s "$stack" '. + [$s]')
+    up=$(echo "$stack" | jq '.summary.up')
+    ex=$(echo "$stack" | jq '.summary.exited')
+    total_up=$((total_up + up))
+    total_ex=$((total_ex + ex))
+  done < <(discover_env_files)
+  jq -nc \
+    --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --argjson stacks "$stacks" \
+    --argjson stacks_n "$stacks_n" \
+    --argjson total_up "$total_up" \
+    --argjson total_ex "$total_ex" \
+  '{
+    generated_at:$generated_at,
+    stacks:$stacks,
+    total:{stacks:$stacks_n, up:$total_up, exited:$total_ex, workers:($total_up + $total_ex)}
+  }'
+}
+
+cmd_ps_json_one() {
+  local stack
+  stack=$(json_stack_for_loaded_env)
+  jq -nc \
+    --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --argjson stacks "[$stack]" \
+    --argjson total_up "$(echo "$stack" | jq '.summary.up')" \
+    --argjson total_ex "$(echo "$stack" | jq '.summary.exited')" \
+    '{
+      generated_at:$generated_at,
+      stacks:$stacks,
+      total:{stacks:1, up:$total_up, exited:$total_ex, workers:($total_up + $total_ex)}
+    }'
+}
+
 cmd_ps_all() {
   local ef stacks=0 total_up=0 total_ex=0
   print_ps_header
@@ -414,9 +525,24 @@ cmd_ps_all() {
     "$stacks" "$total_up" "$total_ex" "$((total_up + total_ex))"
 }
 
-if [[ "$CMD" == ps && "$PS_ALL" == 1 ]]; then
-  cmd_ps_all
-  exit 0
+if [[ "$CMD" == ps ]]; then
+  if [[ "$PS_JSON" == 1 ]]; then
+    if [[ "$PS_ALL" == 1 ]]; then
+      cmd_ps_json_all
+    else
+      if [[ -z "$ENV_FILE" ]]; then
+        ENV_FILE="${SCRIPT_DIR}/var.env"
+      fi
+      [[ "$ENV_FILE" = /* ]] || ENV_FILE="${SCRIPT_DIR}/${ENV_FILE}"
+      load_env_for "$ENV_FILE"
+      cmd_ps_json_one
+    fi
+    exit 0
+  fi
+  if [[ "$PS_ALL" == 1 ]]; then
+    cmd_ps_all
+    exit 0
+  fi
 fi
 
 if [[ -z "$ENV_FILE" ]]; then

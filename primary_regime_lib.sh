@@ -224,7 +224,13 @@ _sync_primary_regime_at_ema_impl() {
         continue
       fi
       echo "place $otype @ $ema_px (magic $magic)"
-      _mt5_primary open_order "$SYMBOL" "$otype" "$PRIMARY_VOLUME" "$ema_px" "$magic" 0 0 "$COMMENT"
+      local place_out place_side=buy
+      [[ "$otype" == sell* ]] && place_side=sell
+      place_out=$(_mt5_primary open_order "$SYMBOL" "$otype" "$PRIMARY_VOLUME" "$ema_px" "$magic" 0 0 "$COMMENT")
+      echo "$place_out"
+      if echo "$place_out" | jq -e .ok >/dev/null 2>&1 && declare -F stats_order_created >/dev/null 2>&1; then
+        stats_order_created "$otype" "$place_side" "$COMMENT" "$magic"
+      fi
       orders_raw=$(_mt5_primary get_orders "$SYMBOL") || return 1
       continue
     fi

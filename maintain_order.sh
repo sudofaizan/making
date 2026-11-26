@@ -8,6 +8,9 @@ cd "$SCRIPT_DIR" || exit 1
 # shellcheck source=load_env.sh
 source "${SCRIPT_DIR}/load_env.sh"
 # shellcheck source=primary_regime_lib.sh
+# shellcheck source=stats_store.sh
+source "${SCRIPT_DIR}/stats_store.sh"
+# shellcheck source=primary_regime_lib.sh
 source "${SCRIPT_DIR}/primary_regime_lib.sh"
 
 _singleton_lock="${PID_DIR}/maintain_order.singleton"

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MAKING — Workers</title>
+  <link rel="stylesheet" href="static/style.css" />
+</head>
+<body>
+  <header class="top">
+    <p>
+      <strong>MAKING</strong>
+      <span class="muted">Worker stacks on this host</span>
+    </p>
+    <div class="top-actions">
+      <button type="button" id="btnAddStack" class="btn">+ Add stack</button>
+      <label class="chk"><input type="checkbox" id="autoRefresh" checked /> Auto 10s</label>
+      <button type="button" id="btnRefresh" class="btn">Refresh</button>
+      <button type="button" id="btnLogout" class="btn ghost">Log out</button>
+    </div>
+  </header>
+  <div id="banner" class="banner hidden"></div>
+  <p id="meta" class="meta muted"></p>
+  <div id="stacks" class="stacks"></div>
+
+  <div id="envModal" class="modal hidden" role="dialog" aria-labelledby="envModalTitle">
+    <div class="modal-panel">
+      <header class="modal-hd">
+        <h2 id="envModalTitle">Stack env</h2>
+        <button type="button" id="envModalClose" class="btn ghost modal-x" aria-label="Close">×</button>
+      </header>
+      <div id="envCreateOpts" class="env-create-opts hidden">
+        <p class="muted">Create stack — import a <code>.env</code> from your machine (e.g. ETH.env), clone on server, or start from GOLD template.</p>
+        <div class="env-source-row">
+          <label class="btn ghost file-btn">Upload .env file<input type="file" id="envFileUpload" accept=".env,text/plain" hidden /></label>
+          <button type="button" id="envFromTemplate" class="btn ghost">From template</button>
+          <select id="envCloneSelect" class="env-select">
+            <option value="">Clone from…</option>
+          </select>
+        </div>
+        <label class="field-label">Save as <span class="muted">(env/ folder)</span></label>
+        <input type="text" id="envNewFilename" class="env-input" placeholder="ETHUSD.env" />
+      </div>
+      <div class="env-tabs">
+        <button type="button" class="env-tab active" data-tab="form">Form</button>
+        <button type="button" class="env-tab" data-tab="raw">Raw file</button>
+      </div>
+      <div id="envFormPane" class="env-form-pane"></div>
+      <textarea id="envRawEditor" class="env-raw hidden" rows="16" spellcheck="false"></textarea>
+      <p id="envModalErr" class="login-err hidden"></p>
+      <footer class="modal-ft">
+        <button type="button" id="envSaveBtn" class="btn">Save</button>
+        <button type="button" id="envCancelBtn" class="btn ghost">Cancel</button>
+      </footer>
+    </div>
+  </div>
+  <script>
+    window.MAKING_BASE = (function () {
+      const p = location.pathname.replace(/\/?$/, "");
+      if (p.endsWith("/index.html")) return p.slice(0, -"/index.html".length) || "/making";
+      return p || "/making";
+    })();
+  </script>
+  <script src="static/env-editor.js"></script>
+  <script src="static/stats-ui.js"></script>
+  <script src="static/app.js"></script>
+</body>
+</html>

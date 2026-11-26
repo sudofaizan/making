@@ -5,6 +5,8 @@ cd "$SCRIPT_DIR" || exit 1
 [[ "${1:-}" == __MAKING_WORKER__* ]] && shift
 # shellcheck source=load_env.sh
 source "${SCRIPT_DIR}/load_env.sh"
+# shellcheck source=stats_store.sh
+source "${SCRIPT_DIR}/stats_store.sh"
 
 _singleton_lock="${PID_DIR}/TC_SELL.singleton"
 mkdir -p "$(dirname "$_singleton_lock")"

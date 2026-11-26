@@ -3,3 +3,6 @@ pids/
 *.log
 *.pid
 .DS_Store
+data/
+dashboard/dashboard.env
+dashboard/__pycache__/

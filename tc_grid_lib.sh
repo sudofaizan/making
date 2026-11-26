@@ -350,6 +350,9 @@ place_grid_limit() {
   local out req_vol
   out=$(mt5_retry "$MT5_CMD" open_order "$SYMBOL" "$otype" "$vol" "$price" "$MAGIC" 0 0 "$comment")
   echo "$out"
+  if echo "$out" | jq -e .ok >/dev/null 2>&1 && declare -F stats_order_created >/dev/null 2>&1; then
+    stats_order_created "$otype" "$SIDE" "$comment" "$MAGIC"
+  fi
   req_vol=$(echo "$out" | jq -r '.request.volume // empty' 2>/dev/null) || true
   if [[ -n "$req_vol" ]] && [[ "$req_vol" != "$vol" ]]; then
     echo "warn: VPS/broker changed volume $vol -> $req_vol (fix server placeOrder to honor lot size)" >&2
@@ -437,15 +440,21 @@ advance_grid() {
 }
 
 close_basket_and_report() {
-  local bal_before bal_after delta elapsed target close_raw
+  local bal_before bal_after delta elapsed target close_raw buy_c sell_c
   target=$(basket_target)
   elapsed=$(($(date +%s) - SESSION_START))
+  refresh_positions_cache || true
+  buy_c=$(echo "$_CACHE_POS_JSON" | jq "[.positions[]? | select(.magic == $MAGIC and .type == \"buy\")] | length")
+  sell_c=$(echo "$_CACHE_POS_JSON" | jq "[.positions[]? | select(.magic == $MAGIC and .type == \"sell\")] | length")
   bal_before=$(account_balance)
   close_raw=$(mt5_retry "$MT5_CMD" close_grid_basket "$SYMBOL" "$MAGIC")
   echo "$close_raw"
   bal_after=$(account_balance)
   delta=$(echo "$bal_after - $bal_before" | bc -l)
   echo "close_grid_basket (magic $MAGIC $SIDE): balance before=$bal_before after=$bal_after delta=$delta"
+  if declare -F stats_basket_closed >/dev/null 2>&1; then
+    stats_basket_closed "$MAGIC" "$delta" "$buy_c" "$sell_c"
+  fi
   refresh_positions_cache || true
   if refresh_orders_cache; then
     cleanup_orphan_grid_pendings

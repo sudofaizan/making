@@ -1,0 +1,17 @@
+[Unit]
+Description=MAKING worker dashboard (zone4 /making/)
+After=network.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/home/ec2-user/making/dashboard
+Environment=MAKING_ROOT=/home/ec2-user/making
+Environment=DASHBOARD_BASE_PATH=/making
+EnvironmentFile=-/home/ec2-user/making/dashboard/dashboard.env
+ExecStart=/usr/bin/python3 /home/ec2-user/making/dashboard/server.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

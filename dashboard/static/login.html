@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MAKING — Login</title>
+  <link rel="stylesheet" href="static/style.css" />
+</head>
+<body class="login-page">
+  <div class="login-card">
+    <h1>MAKING</h1>
+    <p class="muted">Worker dashboard — enter password</p>
+    <form id="loginForm" class="login-form">
+      <label for="password">Dashboard password</label>
+      <input type="password" id="password" name="password" autocomplete="current-password" required autofocus />
+      <p id="loginErr" class="login-err hidden"></p>
+      <button type="submit" class="btn login-submit">Sign in</button>
+    </form>
+  </div>
+  <script>
+    window.MAKING_BASE = (function () {
+      const p = location.pathname.replace(/\/?$/, "");
+      if (p.endsWith("/login.html")) return p.slice(0, -"/login.html".length) || "/making";
+      if (p.endsWith("/login")) return p.slice(0, -"/login".length) || "/making";
+      return p || "/making";
+    })();
+  </script>
+  <script src="static/login.js"></script>
+</body>
+</html>
