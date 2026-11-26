@@ -7,24 +7,25 @@ cd "$SCRIPT_DIR" || exit 1
 
 ENV_FILE=""
 CMD=""
+PS_ALL=0
 
 usage() {
   cat <<EOF
-Usage: $0 [-e ENV_FILE] {start|stop|restart|ps}
+Usage: $0 [-e ENV_FILE] {start|stop|restart|ps} [ps options]
 
   -e ENV_FILE   trading + MT5 settings (default: ${SCRIPT_DIR}/var.env)
 
   start    — place PRIMARY; workers: maintain_order, TC_BUY, TC_SELL, swingking_ack, log_cleanup
   stop     — stop all background workers for this RUN_TAG
   restart  — stop then start
-  ps       — show worker PIDs and related processes
+  ps       — worker status for one RUN_TAG (use -e or default var.env)
+  ps --all — all stacks: var.env + env/*.env (no -e required)
 
 Env defines RUN_TAG, LOG_DIR, PID_DIR.   Multi-asset (one init per env, same VPS; start/stop are per RUN_TAG only):
   $0 -e var.env start          # GOLD
   $0 -e env/ETH.env start     # ETHUSD (separate logs/pids/magics; does not stop GOLD)
-  $0 -e env/BTCUSD.env start
+  $0 ps --all                 # table of every worker on this host
   $0 -e env/ETH.env ps
-  $0 -e env/ETH.env stop
 EOF
 }
 
@@ -53,19 +54,24 @@ done
 
 [[ -n "$CMD" ]] || { usage; exit 1; }
 
-if [[ -z "$ENV_FILE" ]]; then
-  ENV_FILE="${SCRIPT_DIR}/var.env"
-fi
-[[ "$ENV_FILE" = /* ]] || ENV_FILE="${SCRIPT_DIR}/${ENV_FILE}"
-export ENV_FILE
-# shellcheck source=load_env.sh
-source "${SCRIPT_DIR}/load_env.sh"
-# shellcheck source=primary_regime_lib.sh
-source "${SCRIPT_DIR}/primary_regime_lib.sh"
-
-MT5="$MT5_CMD"
-[[ -x "$MT5" ]] || MT5="$(command -v mt5 2>/dev/null || true)"
-[[ -n "$MT5" ]] || { echo "MT5_CMD not executable: $MT5_CMD" >&2; exit 1; }
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --all)
+      [[ "$CMD" == ps ]] || { echo "init: --all only applies to ps" >&2; usage; exit 1; }
+      PS_ALL=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "init: unknown option: $1" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
 
 WORKERS=(
   "maintain_order:maintain_order.sh"
@@ -77,6 +83,35 @@ WORKERS=(
 
 pid_file() { echo "${PID_DIR}/${RUN_TAG}_$1.pid"; }
 log_file() { echo "${LOG_DIR}/${RUN_TAG}_$1.log"; }
+
+env_file_relpath() {
+  local abs="$1"
+  if [[ "$abs" == "$SCRIPT_DIR"/* ]]; then
+    echo "${abs#"$SCRIPT_DIR"/}"
+  else
+    echo "$abs"
+  fi
+}
+
+load_env_for() {
+  local f="$1"
+  [[ "$f" = /* ]] || f="${SCRIPT_DIR}/${f}"
+  ENV_FILE="$f"
+  export ENV_FILE
+  # shellcheck source=load_env.sh
+  source "${SCRIPT_DIR}/load_env.sh"
+}
+
+discover_env_files() {
+  local f
+  if [[ -f "${SCRIPT_DIR}/var.env" ]]; then
+    echo "${SCRIPT_DIR}/var.env"
+  fi
+  for f in "${SCRIPT_DIR}"/env/*.env; do
+    [[ -f "$f" ]] || continue
+    echo "$f"
+  done
+}
 
 # Visible in ps/pgrep so GOLD + ETHUSD workers do not kill each other (env vars are not in cmdline).
 worker_instance_id() { echo "__MAKING_WORKER__${RUN_TAG}__$1__"; }
@@ -254,26 +289,120 @@ cmd_restart() {
   cmd_start
 }
 
-cmd_ps() {
-  local pair name script pf pid
-  echo "=== workers RUN_TAG=$RUN_TAG ($SCRIPT_DIR) ==="
+# Docker-style status for one worker; sets _PS_* globals.
+collect_worker_ps() {
+  local name="$1"
+  local pf pid et
+  _PS_WORKER="$name"
+  pf=$(pid_file "$name")
+  if is_running "$name"; then
+    pid=$(cat "$pf")
+    _PS_STATUS="Up"
+    _PS_PID="$pid"
+    et=$(ps -p "$pid" -o etime= 2>/dev/null | tr -d ' ' || true)
+    _PS_UPTIME="${et:--}"
+    _PS_RUNNING=1
+  elif [[ -f "$pf" ]]; then
+    pid=$(cat "$pf")
+    rm -f "$pf"
+    _PS_STATUS="Exited (stale pid)"
+    _PS_PID="$pid"
+    _PS_UPTIME="-"
+    _PS_RUNNING=0
+  else
+    _PS_STATUS="Exited"
+    _PS_PID="-"
+    _PS_UPTIME="-"
+    _PS_RUNNING=0
+  fi
+}
+
+_PS_HDR_RUNTAG=7
+_PS_HDR_SYMBOL=8
+_PS_HDR_WORKER=16
+_PS_HDR_STATUS=18
+_PS_HDR_PID=8
+_PS_HDR_UPTIME=10
+
+print_ps_header() {
+  printf "%-${_PS_HDR_RUNTAG}s %-${_PS_HDR_SYMBOL}s %-${_PS_HDR_WORKER}s %-${_PS_HDR_STATUS}s %-${_PS_HDR_PID}s %-${_PS_HDR_UPTIME}s %s\n" \
+    "RUNTAG" "SYMBOL" "WORKER" "STATUS" "PID" "UPTIME" "ENV"
+  printf "%-${_PS_HDR_RUNTAG}s %-${_PS_HDR_SYMBOL}s %-${_PS_HDR_WORKER}s %-${_PS_HDR_STATUS}s %-${_PS_HDR_PID}s %-${_PS_HDR_UPTIME}s %s\n" \
+    "-------" "--------" "----------------" "------------------" "--------" "----------" "---------"
+}
+
+print_ps_row() {
+  local env_rel="$1"
+  printf "%-${_PS_HDR_RUNTAG}s %-${_PS_HDR_SYMBOL}s %-${_PS_HDR_WORKER}s %-${_PS_HDR_STATUS}s %-${_PS_HDR_PID}s %-${_PS_HDR_UPTIME}s %s\n" \
+    "$RUN_TAG" "$SYMBOL" "$_PS_WORKER" "$_PS_STATUS" "$_PS_PID" "$_PS_UPTIME" "$env_rel"
+}
+
+cmd_ps_for_loaded_env() {
+  local pair name env_rel running=0 stopped=0
+  env_rel=$(env_file_relpath "$ENV_FILE")
   for pair in "${WORKERS[@]}"; do
     name="${pair%%:*}"
-    script="${pair##*:}"
-    pf=$(pid_file "$name")
-    if is_running "$name"; then
-      pid=$(cat "$pf")
-      echo "$name  RUNNING  pid=$pid  log=$(log_file "$name")"
-      ps -p "$pid" -o pid=,etime=,command= 2>/dev/null | sed 's/^/    /'
-    elif [[ -f "$pf" ]]; then
-      pid=$(cat "$pf")
-      echo "$name  STOPPED (stale pid file: $pid)"
-      rm -f "$pf"
+    collect_worker_ps "$name"
+    print_ps_row "$env_rel"
+    if [[ "$_PS_RUNNING" == 1 ]]; then
+      running=$((running + 1))
     else
-      echo "$name  STOPPED  (no pid file)"
+      stopped=$((stopped + 1))
     fi
   done
+  echo ""
+  printf "Summary [%s]: %d up, %d exited (%d workers)\n" "$RUN_TAG" "$running" "$stopped" "${#WORKERS[@]}"
 }
+
+cmd_ps() {
+  local running=0 stopped=0 total=0
+  print_ps_header
+  cmd_ps_for_loaded_env
+}
+
+cmd_ps_all() {
+  local ef stacks=0 total_up=0 total_ex=0
+  print_ps_header
+  while IFS= read -r ef; do
+    [[ -z "$ef" ]] && continue
+    stacks=$((stacks + 1))
+    load_env_for "$ef"
+    local pair name env_rel
+    env_rel=$(env_file_relpath "$ef")
+    for pair in "${WORKERS[@]}"; do
+      name="${pair%%:*}"
+      collect_worker_ps "$name"
+      print_ps_row "$env_rel"
+      if [[ "$_PS_RUNNING" == 1 ]]; then
+        total_up=$((total_up + 1))
+      else
+        total_ex=$((total_ex + 1))
+      fi
+    done
+  done < <(discover_env_files)
+  echo ""
+  printf "Total: %d stack(s), %d up, %d exited (%d workers)\n" \
+    "$stacks" "$total_up" "$total_ex" "$((total_up + total_ex))"
+}
+
+if [[ "$CMD" == ps && "$PS_ALL" == 1 ]]; then
+  cmd_ps_all
+  exit 0
+fi
+
+if [[ -z "$ENV_FILE" ]]; then
+  ENV_FILE="${SCRIPT_DIR}/var.env"
+fi
+[[ "$ENV_FILE" = /* ]] || ENV_FILE="${SCRIPT_DIR}/${ENV_FILE}"
+load_env_for "$ENV_FILE"
+
+if [[ "$CMD" != ps ]]; then
+  # shellcheck source=primary_regime_lib.sh
+  source "${SCRIPT_DIR}/primary_regime_lib.sh"
+  MT5="$MT5_CMD"
+  [[ -x "$MT5" ]] || MT5="$(command -v mt5 2>/dev/null || true)"
+  [[ -n "$MT5" ]] || { echo "MT5_CMD not executable: $MT5_CMD" >&2; exit 1; }
+fi
 
 case "$CMD" in
   start)   cmd_start ;;
