@@ -22,12 +22,30 @@ import threading
 
 ROOT = Path(os.environ.get("MAKING_ROOT", Path(__file__).resolve().parent.parent)).resolve()
 STATIC = Path(__file__).resolve().parent / "static"
+STATIC_VER_FILE = Path(__file__).resolve().parent / "STATIC_VER"
 CONFIG = Path(__file__).resolve().parent / "dashboard.env"
 BASE_PATH = os.environ.get("DASHBOARD_BASE_PATH", "/making").rstrip("/") or "/making"
 SESSION_COOKIE = "making_session"
 SESSION_DAYS = 14
 
 ENV_FILE_RE = re.compile(r"^[a-zA-Z0-9._/-]+\.env$")
+
+
+def static_version() -> str:
+    if STATIC_VER_FILE.is_file():
+        return STATIC_VER_FILE.read_text().strip() or "1"
+    return os.environ.get("STATIC_V", "1")
+
+
+def inject_static_version(html: str) -> str:
+    return html.replace("{{STATIC_V}}", static_version())
+
+
+def static_cache_headers() -> list[tuple[str, str]]:
+    return [
+        ("Cache-Control", "no-store, no-cache, must-revalidate"),
+        ("Pragma", "no-cache"),
+    ]
 
 
 def load_config() -> dict[str, str]:
@@ -217,7 +235,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         sub = self._path_under_base()
         if sub in ("/login", "/login.html"):
-            self._send_bytes(200, (STATIC / "login.html").read_bytes(), "text/html; charset=utf-8")
+            body = inject_static_version((STATIC / "login.html").read_text(encoding="utf-8"))
+            self._send_bytes(
+                200, body.encode("utf-8"), "text/html; charset=utf-8", extra_headers=static_cache_headers()
+            )
             return
         if sub in ("/", "/index.html"):
             if not is_logged_in(self.headers, self.cfg) and (self.cfg.get("DASHBOARD_PASSWORD")):
@@ -225,10 +246,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Location", f"{cookie_path()}/login")
                 self.end_headers()
                 return
-            self._send_bytes(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
+            body = inject_static_version((STATIC / "index.html").read_text(encoding="utf-8"))
+            self._send_bytes(
+                200, body.encode("utf-8"), "text/html; charset=utf-8", extra_headers=static_cache_headers()
+            )
             return
         if sub.startswith("/static/"):
-            rel = sub[len("/static/") :]
+            rel = sub[len("/static/") :].split("?", 1)[0]
             if ".." in rel or rel.startswith("/"):
                 self.send_error(404)
                 return
@@ -241,7 +265,7 @@ class Handler(BaseHTTPRequestHandler):
                 ct = "text/css; charset=utf-8"
             elif fp.suffix == ".js":
                 ct = "application/javascript; charset=utf-8"
-            self._send_bytes(200, fp.read_bytes(), ct)
+            self._send_bytes(200, fp.read_bytes(), ct, extra_headers=static_cache_headers())
             return
         if sub == "/api/health":
             self._send_json(200, {"ok": True, "making_root": str(ROOT)})

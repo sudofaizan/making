@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>MAKING — Workers</title>
-  <link rel="stylesheet" href="static/style.css" />
+  <link rel="stylesheet" href="static/style.css?v={{STATIC_V}}" />
 </head>
 <body>
   <header class="top">
@@ -61,8 +61,8 @@
       return p || "/making";
     })();
   </script>
-  <script src="static/env-editor.js"></script>
-  <script src="static/stats-ui.js"></script>
-  <script src="static/app.js"></script>
+  <script src="static/env-editor.js?v={{STATIC_V}}"></script>
+  <script src="static/stats-ui.js?v={{STATIC_V}}"></script>
+  <script src="static/app.js?v={{STATIC_V}}"></script>
 </body>
 </html>

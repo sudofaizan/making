@@ -30,6 +30,7 @@ if [[ -f /tmp/making-dashboard.env.bak ]]; then
 fi
 chmod +x init.sh mt5 mt5_api.sh stats_store.sh maintain_order.sh tc_grid_lib.sh TC_BUY.sh TC_SELL.sh 2>/dev/null || true
 chmod +x dashboard/server.py dashboard/install-dashboard.sh 2>/dev/null || true
+git rev-parse --short HEAD > dashboard/STATIC_VER 2>/dev/null || echo dev > dashboard/STATIC_VER
 if systemctl is-enabled making-dashboard &>/dev/null; then
   sudo systemctl restart making-dashboard
   sudo systemctl is-active making-dashboard

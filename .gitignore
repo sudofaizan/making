@@ -5,4 +5,5 @@ pids/
 .DS_Store
 data/
 dashboard/dashboard.env
+dashboard/STATIC_VER
 dashboard/__pycache__/
