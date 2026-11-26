@@ -25,6 +25,6 @@ clear_logs() {
 echo "[${RUN_TAG}] log_cleanup: every ${LOG_CLEAN_EVERY_HOURS:-12}h → ${LOG_DIR}/*.log (truncate, keeps worker file handles)"
 while true; do
   clear_logs
-  # Built-in sleep: external sleep inherits flock fd if we ever re-add locking; also dies with this bash.
-  builtin sleep "$INTERVAL_SEC"
+  # Plain sleep (no long-held flock); init stop uses kill_worker_tree on this bash parent.
+  sleep "$INTERVAL_SEC"
 done

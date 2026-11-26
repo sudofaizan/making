@@ -292,7 +292,7 @@ cmd_restart() {
 # Docker-style status for one worker; sets _PS_* globals.
 collect_worker_ps() {
   local name="$1"
-  local pf pid et
+  local pf pid et iid live_pids n_live filepid
   _PS_WORKER="$name"
   pf=$(pid_file "$name")
   if is_running "$name"; then
@@ -302,10 +302,39 @@ collect_worker_ps() {
     et=$(ps -p "$pid" -o etime= 2>/dev/null | tr -d ' ' || true)
     _PS_UPTIME="${et:--}"
     _PS_RUNNING=1
-  elif [[ -f "$pf" ]]; then
+    return
+  fi
+
+  iid=$(worker_instance_id "$name")
+  live_pids=$(pgrep -f "$iid" 2>/dev/null || true)
+  if [[ -n "$live_pids" ]]; then
+    n_live=$(printf '%s\n' "$live_pids" | sed '/^$/d' | wc -l | tr -d ' ')
+    pid=$(printf '%s\n' "$live_pids" | head -1)
+    _PS_PID="$pid"
+    et=$(ps -p "$pid" -o etime= 2>/dev/null | tr -d ' ' || true)
+    _PS_UPTIME="${et:--}"
+    _PS_RUNNING=1
+    if [[ "$n_live" -gt 1 ]]; then
+      _PS_STATUS="Up (${n_live}x dup)"
+    elif [[ -f "$pf" ]]; then
+      filepid=$(cat "$pf")
+      if [[ "$filepid" != "$pid" ]]; then
+        _PS_STATUS="Up (heal pid)"
+        echo "$pid" >"$pf"
+      else
+        _PS_STATUS="Up"
+      fi
+    else
+      _PS_STATUS="Up (heal pid)"
+      echo "$pid" >"$pf"
+    fi
+    return
+  fi
+
+  if [[ -f "$pf" ]]; then
     pid=$(cat "$pf")
     rm -f "$pf"
-    _PS_STATUS="Exited (stale pid)"
+    _PS_STATUS="Exited (stale)"
     _PS_PID="$pid"
     _PS_UPTIME="-"
     _PS_RUNNING=0
@@ -320,7 +349,7 @@ collect_worker_ps() {
 _PS_HDR_RUNTAG=7
 _PS_HDR_SYMBOL=8
 _PS_HDR_WORKER=16
-_PS_HDR_STATUS=18
+_PS_HDR_STATUS=22
 _PS_HDR_PID=8
 _PS_HDR_UPTIME=10
 
@@ -328,7 +357,7 @@ print_ps_header() {
   printf "%-${_PS_HDR_RUNTAG}s %-${_PS_HDR_SYMBOL}s %-${_PS_HDR_WORKER}s %-${_PS_HDR_STATUS}s %-${_PS_HDR_PID}s %-${_PS_HDR_UPTIME}s %s\n" \
     "RUNTAG" "SYMBOL" "WORKER" "STATUS" "PID" "UPTIME" "ENV"
   printf "%-${_PS_HDR_RUNTAG}s %-${_PS_HDR_SYMBOL}s %-${_PS_HDR_WORKER}s %-${_PS_HDR_STATUS}s %-${_PS_HDR_PID}s %-${_PS_HDR_UPTIME}s %s\n" \
-    "-------" "--------" "----------------" "------------------" "--------" "----------" "---------"
+    "-------" "--------" "----------------" "----------------------" "--------" "----------" "---------"
 }
 
 print_ps_row() {
