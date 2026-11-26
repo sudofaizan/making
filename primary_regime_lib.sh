@@ -261,17 +261,20 @@ _sync_primary_regime_at_ema_impl() {
       continue
     fi
 
-    echo "reprice ticket $ticket $otype magic $magic: $oprice -> $ema_px"
-    _mt5_primary close_order "$ticket" >/dev/null || {
-      echo "warn: close_order $ticket failed" >&2
-      continue
-    }
-    orders_raw=$(_mt5_primary get_orders "$SYMBOL") || return 1
-    if orders_has_primary_at_price "$orders_raw" "$otype" "$magic" "$ema_px"; then
-      echo "skip place $otype magic $magic — active order already at EMA"
-      continue
+    echo "modify ticket $ticket $otype magic $magic: $oprice -> $ema_px (modifyOrder)"
+    if ! _mt5_primary modify_order "$ticket" "$ema_px" - -; then
+      echo "warn: modify_order $ticket failed — fallback cancel+place" >&2
+      _mt5_primary close_order "$ticket" >/dev/null || {
+        echo "warn: close_order $ticket failed" >&2
+        continue
+      }
+      orders_raw=$(_mt5_primary get_orders "$SYMBOL") || return 1
+      if orders_has_primary_at_price "$orders_raw" "$otype" "$magic" "$ema_px"; then
+        echo "skip place $otype magic $magic — active order already at EMA"
+        continue
+      fi
+      _mt5_primary open_order "$SYMBOL" "$otype" "$PRIMARY_VOLUME" "$ema_px" "$magic" 0 0 "$COMMENT"
     fi
-    _mt5_primary open_order "$SYMBOL" "$otype" "$PRIMARY_VOLUME" "$ema_px" "$magic" 0 0 "$COMMENT"
     orders_raw=$(_mt5_primary get_orders "$SYMBOL") || return 1
     orders_raw=$(cancel_duplicate_primary_legs "$orders_raw" "$mid_price" "$ema_px") || return 1
   done < <(primary_regime_required_pairs "$mid_price" "$ema_px")

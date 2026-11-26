@@ -266,6 +266,22 @@ Example:
   mt5 modify_position 123456789 3610.50 0
 EOF
       ;;
+    modify_order|modifyOrder)
+      cat <<'EOF'
+modify_order — change pending order price / SL / TP (POST /modifyOrder)
+
+  mt5 modify_order <TICKET> <PRICE> [SL_POINTS] [TP_POINTS]
+
+  TICKET      pending order ticket (from get_orders)
+  PRICE       new order price (e.g. EMA for PRIMARY follow)
+  SL_POINTS   optional; omit or - to leave unchanged
+  TP_POINTS   optional; omit or - to leave unchanged
+
+Example:
+  mt5 modify_order 1140789723 3567.02
+  mt5 modify_order 1140789723 3567.02 400 800
+EOF
+      ;;
     close_order)
       cat <<'EOF'
 close_order — cancel pending order (POST /cancelOrder)
@@ -307,6 +323,7 @@ Commands:
   close_trades       close positions by symbol/magic (POST /closePositions)
   close_grid_basket  close basket + cancel orders (POST /closeGridBasket)
   modify_position    set SL/TP on open position (POST /modifyPosition)
+  modify_order       reprice pending order (POST /modifyOrder)
   close_order        cancel pending order by ticket (POST /cancelOrder)
   health         server health (GET /health)
   version        server version (GET /version)
@@ -493,6 +510,22 @@ cmd_modify_position() {
   api_post "/modifyPosition" "{\"ticket\":${ticket},\"sl\":${sl},\"tp\":${tp}}"
 }
 
+cmd_modify_order() {
+  local ticket="${1:?ticket}" price="${2:?price}" sl="${3:--}" tp="${4:--}"
+  local json
+  json=$(python3 - "$ticket" "$price" "$sl" "$tp" <<'PY'
+import json, sys
+ticket, price, sl, tp = sys.argv[1:5]
+body = {"ticket": int(ticket), "price": float(price)}
+for key, val in (("sl_points", sl), ("tp_points", tp)):
+    if val not in ("", "-", "none", "None"):
+        body[key] = int(float(val))
+print(json.dumps(body, separators=(",", ":")))
+PY
+)
+  api_post "/modifyOrder" "$json"
+}
+
 cmd_close_grid_basket() {
   local sym="${1:-}" magic="${2:-}"
   local json
@@ -547,6 +580,7 @@ main() {
     close_grid_basket|closeGridBasket) cmd_close_grid_basket "$@" ;;
     close_order)      cmd_close_order "$@" ;;
     modify_position)  cmd_modify_position "$@" ;;
+    modify_order|modifyOrder) cmd_modify_order "$@" ;;
     health)           api_get "/health" ;;
     version)          api_get "/version" ;;
     *)
