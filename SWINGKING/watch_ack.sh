@@ -11,4 +11,8 @@ else
   export MAKING_ENV_FILE="$MAKING_DIR/var.env"
 fi
 unset ENV_FILE
+_worker_marker="${1:-}"
+if [[ "$_worker_marker" == __MAKING_WORKER__* ]]; then
+  exec bash "$SCRIPT_DIR/swingking.sh" watch-ack "$_worker_marker"
+fi
 exec bash "$SCRIPT_DIR/swingking.sh" watch-ack

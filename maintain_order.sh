@@ -4,6 +4,7 @@ set -uo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 cd "$SCRIPT_DIR" || exit 1
+[[ "${1:-}" == __MAKING_WORKER__* ]] && shift
 # shellcheck source=load_env.sh
 source "${SCRIPT_DIR}/load_env.sh"
 # shellcheck source=primary_regime_lib.sh

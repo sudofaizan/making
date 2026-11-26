@@ -19,9 +19,9 @@ Usage: $0 [-e ENV_FILE] {start|stop|restart|ps}
   restart  — stop then start
   ps       — show worker PIDs and related processes
 
-Env defines RUN_TAG, LOG_DIR, PID_DIR. Multi-asset (one init per env, same VPS):
+Env defines RUN_TAG, LOG_DIR, PID_DIR.   Multi-asset (one init per env, same VPS; start/stop are per RUN_TAG only):
   $0 -e var.env start          # GOLD
-  $0 -e env/ETH.env start     # ETHUSD (separate logs/pids/magics)
+  $0 -e env/ETH.env start     # ETHUSD (separate logs/pids/magics; does not stop GOLD)
   $0 -e env/BTCUSD.env start
   $0 -e env/ETH.env ps
   $0 -e env/ETH.env stop
@@ -56,6 +56,7 @@ done
 if [[ -z "$ENV_FILE" ]]; then
   ENV_FILE="${SCRIPT_DIR}/var.env"
 fi
+[[ "$ENV_FILE" = /* ]] || ENV_FILE="${SCRIPT_DIR}/${ENV_FILE}"
 export ENV_FILE
 # shellcheck source=load_env.sh
 source "${SCRIPT_DIR}/load_env.sh"
@@ -77,6 +78,14 @@ WORKERS=(
 pid_file() { echo "${PID_DIR}/${RUN_TAG}_$1.pid"; }
 log_file() { echo "${LOG_DIR}/${RUN_TAG}_$1.log"; }
 
+# Visible in ps/pgrep so GOLD + ETHUSD workers do not kill each other (env vars are not in cmdline).
+worker_instance_id() { echo "__MAKING_WORKER__${RUN_TAG}__$1__"; }
+
+list_worker_pids() {
+  local name="$1"
+  pgrep -f "$(worker_instance_id "$name")" 2>/dev/null || true
+}
+
 is_running() {
   local name="$1" pf pid
   pf=$(pid_file "$name")
@@ -86,8 +95,7 @@ is_running() {
 }
 
 stop_one() {
-  local name="$1" script="$2" pf pid spid script_path
-  script_path="$SCRIPT_DIR/${2:-}"
+  local name="$1" script="$2" pf pid spid
   pf=$(pid_file "$name")
   if is_running "$name"; then
     pid=$(cat "$pf")
@@ -96,23 +104,21 @@ stop_one() {
     sleep 1
     kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
   fi
-  if [[ -n "$script" && -f "$script_path" ]]; then
-    while IFS= read -r spid; do
-      [[ -z "$spid" ]] && continue
-      echo "stop stray $name (pid $spid)"
-      kill "$spid" 2>/dev/null || true
-      sleep 0.3
-      kill -0 "$spid" 2>/dev/null && kill -9 "$spid" 2>/dev/null || true
-    done < <(pgrep -f "bash ${script_path}" 2>/dev/null || true)
-  fi
+  while IFS= read -r spid; do
+    [[ -z "$spid" ]] && continue
+    echo "stop stray $name (pid $spid)"
+    kill "$spid" 2>/dev/null || true
+    sleep 0.3
+    kill -0 "$spid" 2>/dev/null && kill -9 "$spid" 2>/dev/null || true
+  done < <(list_worker_pids "$name")
   rm -f "$pf"
 }
 
 start_one() {
-  local name="$1" script="$2" pf lf spid script_path
-  script_path="$SCRIPT_DIR/$script"
+  local name="$1" script="$2" pf lf spid iid
   pf=$(pid_file "$name")
   lf=$(log_file "$name")
+  iid=$(worker_instance_id "$name")
   if is_running "$name"; then
     echo "already running $name (pid $(cat "$pf"))"
     return 0
@@ -123,13 +129,14 @@ start_one() {
     kill "$spid" 2>/dev/null || true
     sleep 0.3
     kill -0 "$spid" 2>/dev/null && kill -9 "$spid" 2>/dev/null || true
-  done < <(pgrep -f "bash ${script_path}" 2>/dev/null || true)
+  done < <(list_worker_pids "$name")
   rm -f "$pf"
   echo "start $name ($RUN_TAG) → $lf"
   if [[ "$script" == SWINGKING/* ]]; then
-    nohup env MAKING_ENV_FILE="$ENV_FILE" bash "$SCRIPT_DIR/$script" >>"$lf" 2>&1 &
+    nohup env MAKING_ENV_FILE="$ENV_FILE" ENV_FILE="$ENV_FILE" \
+      bash "$SCRIPT_DIR/$script" "$iid" >>"$lf" 2>&1 &
   else
-    nohup env ENV_FILE="$ENV_FILE" bash "$SCRIPT_DIR/$script" >>"$lf" 2>&1 &
+    nohup env ENV_FILE="$ENV_FILE" bash "$SCRIPT_DIR/$script" "$iid" >>"$lf" 2>&1 &
   fi
   echo $! >"$pf"
   echo "  pid $(cat "$pf")"

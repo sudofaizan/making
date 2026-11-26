@@ -2,6 +2,7 @@
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 TC_SCRIPT_DIR=$SCRIPT_DIR
 cd "$SCRIPT_DIR" || exit 1
+[[ "${1:-}" == __MAKING_WORKER__* ]] && shift
 # shellcheck source=load_env.sh
 source "${SCRIPT_DIR}/load_env.sh"
 
