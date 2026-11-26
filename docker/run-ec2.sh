@@ -37,6 +37,11 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 1
 fi
 
+if systemctl is-active making-dashboard &>/dev/null; then
+  sudo systemctl stop making-dashboard 2>/dev/null || true
+  echo "stopped systemd making-dashboard (free port 8877)"
+fi
+
 if ! sudo docker pull "$IMAGE"; then
   echo "pull failed — building from legacy tree ${LEGACY}"
   if [[ ! -f "${LEGACY}/Dockerfile" ]]; then

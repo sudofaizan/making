@@ -2,7 +2,18 @@
 
 Simple status UI for `init.sh` worker stacks (GOLD, ETHUSD, …) at **`https://zone4.xauusd.bar/making/`**.
 
-## Install (EC2)
+## Docker (default)
+
+Image **`dexterquazi/alphafx:making`** runs the dashboard and all `init.sh` workers in one container.
+
+```bash
+./docker/build-push.sh    # build + push (laptop or CI)
+./deploy.sh               # EC2: pull image, volumes under ~/making-data, port 8877
+```
+
+See **`docker/README.md`**. After a container recreate, **Start** each stack from the UI (PIDs do not survive).
+
+## Install (legacy systemd on host)
 
 ```bash
 cd ~/making && git pull
