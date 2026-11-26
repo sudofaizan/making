@@ -94,23 +94,42 @@ is_running() {
   [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
 }
 
+# stop/restart: kill children too (log_cleanup used to leave orphan sleep holding flock fd).
+kill_worker_tree() {
+  local pid="$1"
+  [[ -n "$pid" ]] || return 0
+  pkill -TERM -P "$pid" 2>/dev/null || true
+  kill -TERM "$pid" 2>/dev/null || true
+  sleep 1
+  if kill -0 "$pid" 2>/dev/null; then
+    pkill -KILL -P "$pid" 2>/dev/null || true
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+}
+
+release_stale_log_cleanup_lock() {
+  local lock="${PID_DIR}/log_cleanup.singleton"
+  [[ -e "$lock" ]] || return 0
+  if command -v fuser >/dev/null 2>&1; then
+    fuser -k "$lock" 2>/dev/null || true
+  fi
+  rm -f "$lock"
+}
+
 stop_one() {
   local name="$1" script="$2" pf pid spid
   pf=$(pid_file "$name")
   if is_running "$name"; then
     pid=$(cat "$pf")
     echo "stop $name (pid $pid)"
-    kill "$pid" 2>/dev/null || true
-    sleep 1
-    kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+    kill_worker_tree "$pid"
   fi
   while IFS= read -r spid; do
     [[ -z "$spid" ]] && continue
     echo "stop stray $name (pid $spid)"
-    kill "$spid" 2>/dev/null || true
-    sleep 0.3
-    kill -0 "$spid" 2>/dev/null && kill -9 "$spid" 2>/dev/null || true
+    kill_worker_tree "$spid"
   done < <(list_worker_pids "$name")
+  [[ "$name" == log_cleanup ]] && release_stale_log_cleanup_lock
   rm -f "$pf"
 }
 
@@ -126,10 +145,9 @@ start_one() {
   while IFS= read -r spid; do
     [[ -z "$spid" ]] && continue
     echo "kill orphan $name (pid $spid) before start"
-    kill "$spid" 2>/dev/null || true
-    sleep 0.3
-    kill -0 "$spid" 2>/dev/null && kill -9 "$spid" 2>/dev/null || true
+    kill_worker_tree "$spid"
   done < <(list_worker_pids "$name")
+  [[ "$name" == log_cleanup ]] && release_stale_log_cleanup_lock
   rm -f "$pf"
   echo "start $name ($RUN_TAG) → $lf"
   if [[ "$script" == SWINGKING/* ]]; then
@@ -139,6 +157,12 @@ start_one() {
     nohup env ENV_FILE="$ENV_FILE" bash "$SCRIPT_DIR/$script" "$iid" >>"$lf" 2>&1 &
   fi
   echo $! >"$pf"
+  sleep 0.3
+  if ! kill -0 "$(cat "$pf")" 2>/dev/null; then
+    echo "warn: $name exited immediately — check $(log_file "$name")" >&2
+    rm -f "$pf"
+    return 1
+  fi
   echo "  pid $(cat "$pf")"
 }
 
