@@ -99,7 +99,13 @@ function stackCard(stack) {
           <span class="stats-range-hint muted"></span>
         </div>
         <p class="stats-empty muted hidden">No stats yet — events fill in after orders, basket closes, and ~1m samples.</p>
-        <canvas class="stats-chart" width="640" height="120"></canvas>
+        <div class="pnl-legend stats-pnl-legend">
+          <span class="on" data-series="realized"><span class="swatch" style="background:#3ddc84"></span>Realized</span>
+          <span data-series="total"><span class="swatch" style="background:#f0b429"></span>Total est.</span>
+        </div>
+        <div class="stats-chart-wrap stats-chart-wrap--idle">
+          <canvas class="stats-chart" aria-label="Accumulative PnL chart"></canvas>
+        </div>
         <div class="stats-grid">
           <div><span class="muted">Orders</span><strong class="stat-orders">—</strong></div>
           <div><span class="muted">Baskets closed</span><strong class="stat-baskets">—</strong></div>
@@ -114,6 +120,7 @@ function stackCard(stack) {
 }
 
 function render(data) {
+  if (window.StatsUI?.destroyAll) StatsUI.destroyAll();
   const total = data.total || {};
   document.getElementById("meta").textContent =
     `Updated ${data.generated_at || "—"} · ${total.stacks ?? "?"} stacks · ${total.up ?? 0} up · ${total.exited ?? 0} exited`;
