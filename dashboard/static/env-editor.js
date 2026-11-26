@@ -162,15 +162,33 @@ window.EnvEditor = (function () {
     await window.loadStatus();
   }
 
-  async function deleteStack(env_file) {
+  async function deleteStack(env_file, workersUp = 0, runTag = "") {
     if (!env_file.startsWith("env/")) {
-      showBanner("var.env cannot be deleted — only env/*.env stacks");
+      showBanner("var.env cannot be removed — only env/*.env stacks");
       return;
     }
-    const ok = confirm(
-      `Delete stack ${env_file}?\nWorkers will be stopped and the env file removed.`
-    );
-    if (!ok) return;
+    const label = runTag ? `${runTag} (${env_file})` : env_file;
+    let ok;
+    if (workersUp > 0) {
+      ok = confirm(
+        `${label} has ${workersUp} worker(s) still running.\n\nStop the stack and remove this card (delete ${env_file})?`
+      );
+      if (!ok) return;
+      showBanner(`Stopping ${label}…`, false);
+      const stopRes = await api("/api/control", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ env_file, action: "stop" }),
+      });
+      const stopBody = await stopRes.json();
+      if (!stopRes.ok || !stopBody.ok || (stopBody.result && !stopBody.result.ok)) {
+        showBanner(stopBody.error || `Could not stop ${label} — delete cancelled`);
+        return;
+      }
+    } else {
+      ok = confirm(`Remove stack ${label}?\nThis deletes ${env_file} from the server.`);
+      if (!ok) return;
+    }
     const res = await api("/api/env/delete", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -181,7 +199,7 @@ window.EnvEditor = (function () {
       showBanner(body.error || "Delete failed");
       return;
     }
-    showBanner(`Deleted ${env_file}`, false);
+    showBanner(`Removed ${env_file}`, false);
     await window.loadStatus();
   }
 

@@ -32,11 +32,12 @@ function stackCard(stack) {
   const s = stack.summary;
   const bc = badgeClass(s);
   const deletable = stack.env_file && stack.env_file.startsWith("env/");
-  const deleteBtn = deletable
-    ? `<button type="button" class="btn stop btn-del-stack" data-env="${stack.env_file}">Delete</button>`
+  const closeBtn = deletable
+    ? `<button type="button" class="stack-close btn-del-stack" data-env="${stack.env_file}" data-up="${s.up}" data-run-tag="${stack.run_tag}" title="Remove stack" aria-label="Remove stack">×</button>`
     : "";
   return `
     <article class="stack" data-env="${stack.env_file}">
+      ${closeBtn}
       <div class="stack-hd">
         <div class="stack-title">
           <h2>${stack.run_tag}</h2>
@@ -46,7 +47,6 @@ function stackCard(stack) {
         </div>
         <div class="stack-actions">
           <button type="button" class="btn ghost btn-edit-env" data-env="${stack.env_file}">Edit .env</button>
-          ${deleteBtn}
           <button type="button" class="btn start" data-action="start">Start</button>
           <button type="button" class="btn stop" data-action="stop">Stop</button>
           <button type="button" class="btn" data-action="restart">Restart</button>
@@ -101,7 +101,9 @@ function render(data) {
     btn.addEventListener("click", () => EnvEditor.openEdit(btn.dataset.env));
   });
   document.querySelectorAll(".btn-del-stack").forEach((btn) => {
-    btn.addEventListener("click", () => EnvEditor.deleteStack(btn.dataset.env));
+    btn.addEventListener("click", () =>
+      EnvEditor.deleteStack(btn.dataset.env, Number(btn.dataset.up || 0), btn.dataset.runTag || "")
+    );
   });
   document.querySelectorAll("article.stack").forEach((article) => {
     const tag = article.querySelector(".stack-title h2")?.textContent;

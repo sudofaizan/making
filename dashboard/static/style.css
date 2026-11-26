@@ -96,10 +96,35 @@ body {
 }
 
 .stack {
+  position: relative;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
   overflow: hidden;
+}
+
+.stack-close {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.5rem;
+  z-index: 2;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  line-height: 1;
+  font-size: 1.35rem;
+  font-weight: 400;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.stack-close:hover {
+  color: var(--down);
+  border-color: var(--down);
+  background: rgba(240, 113, 120, 0.08);
 }
 
 .stack-hd {
