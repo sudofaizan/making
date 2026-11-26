@@ -512,7 +512,7 @@ cmd_modify_position() {
 
 cmd_modify_order() {
   local ticket="${1:?ticket}" price="${2:?price}" sl="${3:--}" tp="${4:--}"
-  local json
+  local json out
   json=$(python3 - "$ticket" "$price" "$sl" "$tp" <<'PY'
 import json, sys
 ticket, price, sl, tp = sys.argv[1:5]
@@ -523,7 +523,12 @@ for key, val in (("sl_points", sl), ("tp_points", tp)):
 print(json.dumps(body, separators=(",", ":")))
 PY
 )
-  api_post "/modifyOrder" "$json"
+  out=$(api_post "/modifyOrder" "$json")
+  echo "$out"
+  if ! echo "$out" | jq -e .ok >/dev/null 2>&1; then
+    echo "modifyOrder: response not ok: $out" >&2
+    exit 1
+  fi
 }
 
 cmd_close_grid_basket() {
