@@ -33,11 +33,10 @@ function stackCard(stack) {
   const bc = badgeClass(s);
   const deletable = stack.env_file && stack.env_file.startsWith("env/");
   const closeBtn = deletable
-    ? `<button type="button" class="stack-close btn-del-stack" data-env="${stack.env_file}" data-up="${s.up}" data-run-tag="${stack.run_tag}" title="Remove stack" aria-label="Remove stack">×</button>`
+    ? `<button type="button" class="stack-close btn-del-stack" data-env="${stack.env_file}" data-up="${s.up}" data-run-tag="${stack.run_tag}" title="Remove stack (stop first if running)" aria-label="Remove stack">×</button>`
     : "";
   return `
     <article class="stack" data-env="${stack.env_file}">
-      ${closeBtn}
       <div class="stack-hd">
         <div class="stack-title">
           <h2>${stack.run_tag}</h2>
@@ -45,14 +44,17 @@ function stackCard(stack) {
           <span class="badge ${bc}">${s.up}/${s.total} up</span>
           <span class="badge">${stack.env_file}</span>
         </div>
-        <div class="stack-actions">
-          <button type="button" class="btn ghost btn-edit-env" data-env="${stack.env_file}">Edit .env</button>
-          <button type="button" class="btn start" data-action="start">Start</button>
-          <button type="button" class="btn stop" data-action="stop">Stop</button>
-          <button type="button" class="btn" data-action="restart">Restart</button>
-          <label class="chk" title="INIT_SKIP_PRIMARY=1">
-            <input type="checkbox" class="skip-primary" /> Skip PRIMARY on start
-          </label>
+        <div class="stack-hd-bar">
+          <div class="stack-actions">
+            <button type="button" class="btn ghost btn-edit-env" data-env="${stack.env_file}">Edit .env</button>
+            <button type="button" class="btn start" data-action="start">Start</button>
+            <button type="button" class="btn stop" data-action="stop">Stop</button>
+            <button type="button" class="btn" data-action="restart">Restart</button>
+            <label class="chk" title="INIT_SKIP_PRIMARY=1">
+              <input type="checkbox" class="skip-primary" /> Skip PRIMARY on start
+            </label>
+          </div>
+          ${closeBtn}
         </div>
       </div>
       <table>
