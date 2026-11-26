@@ -82,7 +82,8 @@ is_running() {
 }
 
 stop_one() {
-  local name="$1" pf pid
+  local name="$1" script="$2" pf pid spid script_path
+  script_path="$SCRIPT_DIR/${2:-}"
   pf=$(pid_file "$name")
   if is_running "$name"; then
     pid=$(cat "$pf")
@@ -91,17 +92,34 @@ stop_one() {
     sleep 1
     kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
   fi
+  if [[ -n "$script" && -f "$script_path" ]]; then
+    while IFS= read -r spid; do
+      [[ -z "$spid" ]] && continue
+      echo "stop stray $name (pid $spid)"
+      kill "$spid" 2>/dev/null || true
+      sleep 0.3
+      kill -0 "$spid" 2>/dev/null && kill -9 "$spid" 2>/dev/null || true
+    done < <(pgrep -f "bash ${script_path}" 2>/dev/null || true)
+  fi
   rm -f "$pf"
 }
 
 start_one() {
-  local name="$1" script="$2" pf lf
+  local name="$1" script="$2" pf lf spid script_path
+  script_path="$SCRIPT_DIR/$script"
   pf=$(pid_file "$name")
   lf=$(log_file "$name")
   if is_running "$name"; then
     echo "already running $name (pid $(cat "$pf"))"
     return 0
   fi
+  while IFS= read -r spid; do
+    [[ -z "$spid" ]] && continue
+    echo "kill orphan $name (pid $spid) before start"
+    kill "$spid" 2>/dev/null || true
+    sleep 0.3
+    kill -0 "$spid" 2>/dev/null && kill -9 "$spid" 2>/dev/null || true
+  done < <(pgrep -f "bash ${script_path}" 2>/dev/null || true)
   rm -f "$pf"
   echo "start $name ($RUN_TAG) → $lf"
   if [[ "$script" == SWINGKING/* ]]; then
@@ -186,10 +204,11 @@ cmd_start() {
 
 cmd_stop() {
   echo "=== init stop RUN_TAG=$RUN_TAG ==="
-  local pair name
+  local pair name script
   for pair in "${WORKERS[@]}"; do
     name="${pair%%:*}"
-    stop_one "$name"
+    script="${pair##*:}"
+    stop_one "$name" "$script"
   done
   echo "=== stopped ==="
 }

@@ -126,6 +126,42 @@ cancel_all_primary_pendings() {
     )')
 }
 
+# More than one PRIMARY pending on the same leg (otype+magic) — keep best at EMA, cancel the rest.
+cancel_duplicate_primary_legs() {
+  local orders_raw="$1" mid="$2" ema_px="$3" otype magic
+  local rows_json keep_ticket row ticket oprice dist
+
+  while read -r otype magic; do
+    [[ -z "$otype" ]] && continue
+    rows_json=$(echo "$orders_raw" | jq -c \
+      --arg c "$COMMENT" --arg t "$otype" --argjson m "$magic" \
+      --argjson vmin "$PRIMARY_VOLUME_MIN" --argjson vmax "$PRIMARY_VOLUME_MAX" \
+      '[.orders[]? | select(
+        .comment == $c and .type == $t and .magic == $m
+        and ((.volume | tonumber) >= $vmin and (.volume | tonumber) <= $vmax)
+      )]')
+    count=$(echo "$rows_json" | jq 'length')
+    (( count <= 1 )) && continue
+
+    keep_ticket=$(echo "$rows_json" | jq -er --argjson ema "$ema_px" --argjson e "$PRICE_EPS" '
+      [.[] | {ticket, price: (.price | tonumber), dist: (((.price | tonumber) - $ema) | fabs)}]
+      | sort_by(.dist) | .[0].ticket')
+
+    while IFS= read -r row; do
+      [[ -z "$row" ]] && continue
+      ticket=$(echo "$row" | jq -r .ticket)
+      [[ "$ticket" == "$keep_ticket" ]] && continue
+      oprice=$(echo "$row" | jq -r .price)
+      echo "cancel duplicate PRIMARY $otype magic $magic ticket $ticket @ $oprice (keep $keep_ticket)"
+      _mt5_primary close_order "$ticket" >/dev/null || \
+        echo "warn: close_order $ticket failed" >&2
+    done < <(echo "$rows_json" | jq -c '.[]')
+    orders_raw=$(_mt5_primary get_orders "$SYMBOL") || return 1
+  done < <(primary_regime_required_pairs "$mid" "$ema_px")
+
+  echo "$orders_raw"
+}
+
 orders_has_primary_at_price() {
   local orders_raw="$1" otype="$2" magic="$3" target_price="$4"
   echo "$orders_raw" | jq -e \
@@ -139,8 +175,23 @@ orders_has_primary_at_price() {
     )] | length > 0' >/dev/null
 }
 
+_PRIMARY_SYNC_LOCK="${PID_DIR:-/tmp}/primary_sync.lock"
+
 # EMA pendings only while fully flat (no PRIMARY buy or sell position). Manual delete → both recreated.
 sync_primary_regime_at_ema() {
+  local ema_price="$1" orders_raw="$2" mid_price="$3"
+  mkdir -p "$(dirname "$_PRIMARY_SYNC_LOCK")"
+
+  (
+    flock -w 15 9 || {
+      echo "warn: primary sync busy (another worker?) — skip tick" >&2
+      return 0
+    }
+    _sync_primary_regime_at_ema_impl "$@"
+  ) 9>>"$_PRIMARY_SYNC_LOCK"
+}
+
+_sync_primary_regime_at_ema_impl() {
   local ema_price="$1" orders_raw="$2" mid_price="$3"
   local otype magic row ticket oprice stale ema_px positions_raw
 
@@ -171,6 +222,7 @@ sync_primary_regime_at_ema() {
   done < <(list_stale_regime_primaries "$orders_raw" "$mid_price" "$ema_px")
 
   orders_raw=$(_mt5_primary get_orders "$SYMBOL") || return 1
+  orders_raw=$(cancel_duplicate_primary_legs "$orders_raw" "$mid_price" "$ema_px") || return 1
 
   if ! positions_raw=$(_mt5_primary get_positions "$SYMBOL"); then
     echo "warn: get_positions failed after stale cleanup — skip place" >&2
@@ -221,6 +273,7 @@ sync_primary_regime_at_ema() {
     fi
     _mt5_primary open_order "$SYMBOL" "$otype" "$PRIMARY_VOLUME" "$ema_px" "$magic" 0 0 "$COMMENT"
     orders_raw=$(_mt5_primary get_orders "$SYMBOL") || return 1
+    orders_raw=$(cancel_duplicate_primary_legs "$orders_raw" "$mid_price" "$ema_px") || return 1
   done < <(primary_regime_required_pairs "$mid_price" "$ema_px")
 
   return 0

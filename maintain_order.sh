@@ -9,6 +9,14 @@ source "${SCRIPT_DIR}/load_env.sh"
 # shellcheck source=primary_regime_lib.sh
 source "${SCRIPT_DIR}/primary_regime_lib.sh"
 
+_singleton_lock="${PID_DIR}/maintain_order.singleton"
+mkdir -p "$(dirname "$_singleton_lock")"
+exec 9>>"$_singleton_lock"
+if ! flock -n 9; then
+  echo "[${RUN_TAG}] maintain_order: duplicate instance — exit (use init.sh stop/start)"
+  exit 0
+fi
+
 MT5="$MT5_CMD"
 [[ -x "$MT5" ]] || MT5="$(command -v mt5 2>/dev/null || true)"
 

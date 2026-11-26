@@ -5,6 +5,14 @@ cd "$SCRIPT_DIR" || exit 1
 # shellcheck source=load_env.sh
 source "${SCRIPT_DIR}/load_env.sh"
 
+_singleton_lock="${PID_DIR}/TC_SELL.singleton"
+mkdir -p "$(dirname "$_singleton_lock")"
+exec 9>>"$_singleton_lock"
+if ! flock -n 9; then
+  echo "[${RUN_TAG}] TC_SELL: duplicate instance — exit"
+  exit 0
+fi
+
 MAGIC=$SELL_MAGIC
 SIDE=sell
 TARGETBASKET=$TC_SELL_TARGETBASKET
