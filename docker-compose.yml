@@ -1,0 +1,22 @@
+services:
+  making:
+    image: dexterquazi/alphafx:making
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        MAKING_REV: local
+    container_name: making
+    restart: unless-stopped
+    ports:
+      - "8877:8877"
+    environment:
+      MAKING_ROOT: /app/making
+      DASHBOARD_BASE_PATH: /making
+    volumes:
+      - ./logs:/app/making/logs
+      - ./pids:/app/making/pids
+      - ./data:/app/making/data
+      - ./env:/app/making/env
+      - ./var.env:/app/making/var.env
+      - ./dashboard/dashboard.env:/app/making/dashboard/dashboard.env

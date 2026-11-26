@@ -1,0 +1,15 @@
+.git
+.github
+**/__pycache__
+**/*.pyc
+.DS_Store
+logs/
+pids/
+data/
+*.log
+*.pid
+dashboard/dashboard.env
+dashboard/STATIC_VER
+instance
+push.sh
+deploy.sh

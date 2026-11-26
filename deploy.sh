@@ -1,20 +1,24 @@
 #!/bin/bash
-# Pull latest on trading EC2 and restart dashboard (run from laptop after push.sh).
+# Deploy MAKING on trading EC2: Docker image dexterquazi/alphafx:making (default).
+# Legacy host git deploy: MAKING_DEPLOY=git ./deploy.sh
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 INSTANCE_FILE="${INSTANCE_FILE:-$ROOT/instance}"
 REMOTE_DIR="${REMOTE_DIR:-/home/ec2-user/making}"
+DEPLOY_MODE="${MAKING_DEPLOY:-docker}"
+IMAGE="${MAKING_IMAGE:-dexterquazi/alphafx:making}"
 
 [[ -f "$INSTANCE_FILE" ]] || { echo "deploy: missing $INSTANCE_FILE" >&2; exit 1; }
 
 SSH_LINE=$(grep -v '^[[:space:]]*#' "$INSTANCE_FILE" | head -1 | sed 's/^[[:space:]]*ssh[[:space:]]*//')
 [[ -n "$SSH_LINE" ]] || { echo "deploy: empty instance file" >&2; exit 1; }
 
-echo "deploy → $REMOTE_DIR"
+echo "deploy (${DEPLOY_MODE}) → EC2"
 
-# shellcheck disable=SC2086
-ssh $SSH_LINE bash -s <<EOF
+if [[ "$DEPLOY_MODE" == "git" ]]; then
+  # shellcheck disable=SC2086
+  ssh $SSH_LINE bash -s <<EOF
 set -euo pipefail
 cd "$REMOTE_DIR"
 if [[ -f dashboard/dashboard.env ]]; then
@@ -37,3 +41,9 @@ if systemctl is-enabled making-dashboard &>/dev/null; then
 fi
 echo "deploy ok at \$(git log -1 --oneline)"
 EOF
+  exit 0
+fi
+
+# Docker deploy
+# shellcheck disable=SC2086
+ssh $SSH_LINE "MAKING_IMAGE='$IMAGE'" bash -s < "$ROOT/docker/run-ec2.sh"
